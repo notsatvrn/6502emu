@@ -1,4 +1,9 @@
+mod opcodes;
+
+use opcodes::OPCODES;
 
 fn main() {
-    println!("Hello, world!");
+    for &(hex, op) in &OPCODES {
+        println!("Hex: 0x{:X}, Operation: {}", hex, op);
+    }
 }
