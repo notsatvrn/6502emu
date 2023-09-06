@@ -1,6 +1,18 @@
-[package]
-name = "emu6502"
-version = "0.1.0"
-edition = "2021"
+[workspace]
+resolver = "2"
 
-[dependencies]
+members = [
+    "6502",
+    "riscv",
+    "x86",
+    "common",
+]
+
+[profile.release]
+codegen-units = 1
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

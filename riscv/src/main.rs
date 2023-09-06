@@ -1,9 +1,7 @@
-mod opcodes;
-
-use opcodes::OPCODES;
+use libemux86::opcodes::OPCODES;
 
 fn main() {
-    for &(hex, op) in &OPCODES {
+    for (hex, op) in OPCODES.entries() {
         println!("Hex: 0x{:X}, Operation: {}", hex, op);
     }
 }
