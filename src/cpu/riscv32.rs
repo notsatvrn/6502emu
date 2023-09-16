@@ -125,8 +125,7 @@ impl Hart {
             self.pc += 4;
             let inst_u32 = u32::from_le_bytes(buf);
             let inst = decode_full(inst_u32);
-            self.execute_parsed(inst);
-            //self.execute(inst_u32);
+            self.execute(inst);
         } else {
             if res != 2 {
                 panic!("reached end of program early");
@@ -259,7 +258,6 @@ impl Hart {
                 0b101 => {
                     let imm = (((inst >> 5) & 0b11) << 3) | (((inst >> 10) & 0b111) << 1);
                     let offset = imm as i32 * 8;
-                    print!("compressed: c.fsd | ");
                     self.fsd(rs2 & 0b111, rs2, offset as i32);
                 }
                 0b110 => {
@@ -267,15 +265,13 @@ impl Hart {
                         | (((inst >> 10) & 0b111) << 1)
                         | ((inst >> 6) & 1);
                     let offset = imm as i32 * 4;
-                    print!("compressed: c.sw | ");
-                    self.write_memory(&self.x[rs2].to_le_bytes(), self.x[2], offset);
+                    self.sw(rs2 & 0b111, rs2, offset as i32);
                 }
                 0b111 => {
                     let imm = (((inst >> 5) & 1) << 4)
                         | (((inst >> 10) & 0b111) << 1)
                         | ((inst >> 6) & 1);
                     let offset = imm as i32 * 4;
-                    print!("compressed: c.fsw | ");
                     self.fsw(rs2 & 0b111, rs2, offset as i32);
                 }
                 _ => panic!("invalid instruction"),
@@ -475,7 +471,7 @@ impl Hart {
                 0b110 => {
                     let imm = (((inst >> 7) & 0b11) << 4) | ((inst >> 9) & 0b1111);
                     let offset = imm as i32 * 4;
-                    self.write_memory(&self.x[rs2].to_le_bytes(), self.x[2], offset);
+                    self.sw(2, rs2, offset as i32);
                 }
                 0b111 => {
                     let imm = (((inst >> 7) & 0b11) << 4) | ((inst >> 9) & 0b1111);
@@ -488,7 +484,7 @@ impl Hart {
         }
     }
 
-    pub fn execute_parsed(&mut self, inst: Instruction) {
+    pub fn execute(&mut self, inst: Instruction) {
         print!("{}", inst);
 
         match inst {
@@ -715,353 +711,283 @@ impl Hart {
                 rs3,
                 add,
                 positive,
+                rounding,
                 precision,
-            }) => unimplemented!(),
-            // RV32F
-            Instruction::FPSingleOp(FPSingleOp { rd, rs1, rs2, mode }) => unimplemented!(),
-            // RV32D
-            Instruction::FPDoubleOp(FPDoubleOp { rd, rs1, rs2, mode }) => unimplemented!(),
-        }
-    }
-
-    // Execute an uncompressed instruction.
-
-    pub fn execute(&mut self, inst: u32) {
-        let opcode = inst & 0b1111111;
-        let rd = ((inst >> 7) & 0b11111) as usize;
-        let funct3 = (inst >> 12) & 0b111;
-        let rs1 = ((inst >> 15) & 0b11111) as usize;
-        let rs2 = ((inst >> 20) & 0b11111) as usize;
-        let funct7 = inst >> 25;
-        let funct2 = funct7 & 0b11;
-        let rs3 = (inst >> 27) as usize;
-
-        match opcode {
-            0b1000011 if funct2 == 0 => {
-                print!("fmadd.s x{}, x{}, x{}, x{}", rd, rs1, rs2, rs3);
-                self.set_f32(
-                    rd,
-                    self.round_rm_f32(
-                        funct3,
-                        false,
-                        self.get_f32(rs1)
-                            .mul_add(self.get_f32(rs2), self.get_f32(rs3)),
-                    ),
-                );
-                println!(" | rd: {}", self.get_f32(rd));
-            }
-            0b1000011 if funct2 == 1 => {
-                print!("fmadd.d x{}, x{}, x{}, x{}", rd, rs1, rs2, rs3);
-                self.f[rd] =
-                    self.round_rm_f64(funct3, false, self.f[rs1].mul_add(self.f[rs2], self.f[rs3]));
-                println!(" | rd: {}", self.f[rd]);
-            }
-            0b1000111 if funct2 == 0 => {
-                print!("fmsub.s x{}, x{}, x{}, x{}", rd, rs1, rs2, rs3);
-                self.set_f32(
-                    rd,
-                    self.round_rm_f32(
-                        funct3,
-                        false,
-                        self.get_f32(rs1)
-                            .mul_add(self.get_f32(rs2), -self.get_f32(rs3)),
-                    ),
-                );
-                println!(" | rd: {}", self.get_f32(rd));
-            }
-            0b1000111 if funct2 == 1 => {
-                print!("fmsub.d x{}, x{}, x{}, x{}", rd, rs1, rs2, rs3);
-                self.f[rd] = self.round_rm_f64(
-                    funct3,
-                    false,
-                    self.f[rs1].mul_add(self.f[rs2], -self.f[rs3]),
-                );
-                println!(" | rd: {}", self.f[rd]);
-            }
-            0b1001011 if funct2 == 0 => {
-                print!("fnmsub.s x{}, x{}, x{}, x{}", rd, rs1, rs2, rs3);
-                self.set_f32(
-                    rd,
-                    self.round_rm_f32(
-                        funct3,
-                        false,
-                        -self
-                            .get_f32(rs1)
-                            .mul_add(self.get_f32(rs2), self.get_f32(rs3)),
-                    ),
-                );
-                println!(" | rd: {}", self.get_f32(rd));
-            }
-            0b1001011 if funct2 == 1 => {
-                print!("fnmsub.d x{}, x{}, x{}, x{}", rd, rs1, rs2, rs3);
-                self.f[rd] = self.round_rm_f64(
-                    funct3,
-                    false,
-                    -self.f[rs1].mul_add(self.f[rs2], self.f[rs3]),
-                );
-                println!(" | rd: {}", self.f[rd]);
-            }
-            0b1001111 if funct2 == 0 => {
-                print!("fnmadd.s x{}, x{}, x{}, x{}", rd, rs1, rs2, rs3);
-                self.set_f32(
-                    rd,
-                    self.round_rm_f32(
-                        funct3,
-                        false,
-                        -self
-                            .get_f32(rs1)
-                            .mul_add(self.get_f32(rs2), -self.get_f32(rs3)),
-                    ),
-                );
-                println!(" | rd: {}", self.get_f32(rd));
-            }
-            0b1001111 if funct2 == 1 => {
-                print!("fnmadd.d x{}, x{}, x{}, x{}", rd, rs1, rs2, rs3);
-                self.f[rd] = self.round_rm_f64(
-                    funct3,
-                    false,
-                    -self.f[rs1].mul_add(self.f[rs2], -self.f[rs3]),
-                );
-                println!(" | rd: {}", self.f[rd]);
-            }
-            0b1010011 => match funct7 {
-                // RV32F
-                0b0000000 => self.set_f32(
-                    rd,
-                    self.round_rm_f32(funct3, false, self.get_f32(rs1) + self.get_f32(rs2)),
-                ),
-                0b0000100 => self.set_f32(
-                    rd,
-                    self.round_rm_f32(funct3, false, self.get_f32(rs1) - self.get_f32(rs2)),
-                ),
-                0b0001000 => self.set_f32(
-                    rd,
-                    self.round_rm_f32(funct3, false, self.get_f32(rs1) * self.get_f32(rs2)),
-                ),
-                0b0001100 => self.set_f32(
-                    rd,
-                    self.round_rm_f32(funct3, false, self.get_f32(rs1) / self.get_f32(rs2)),
-                ),
-                0b0101100 if rs2 == 0b00000 => self.set_f32(
-                    rd,
-                    self.round_rm_f32(funct3, false, self.get_f32(rs1).sqrt()),
-                ),
-                0b0010000 => match funct3 {
-                    0 => self.set_f32(rd, self.get_f32(rs1).copysign(self.get_f32(rs2))),
-                    1 => self.set_f32(rd, self.get_f32(rs1).copysign(-self.get_f32(rs2))),
-                    2 => {
-                        let sign = (self.get_f32(rs1).to_bits() >> 31)
-                            ^ (self.get_f32(rs2).to_bits() >> 31);
-                        self.set_f32(
-                            rd,
-                            f32::from_bits(
-                                (sign << 31) | ((self.get_f32(rs1).to_bits() << 1) >> 1),
-                            ),
-                        );
+            }) => match precision {
+                FPPrecision::Single => {
+                    let mut adder = self.get_f32(rs3);
+                    if (!add && positive) || (!positive && add) {
+                        adder = -adder;
                     }
-                    _ => panic!("invalid instruction"),
-                },
-                0b0010100 => match funct3 {
-                    0 => self.set_f32(rd, self.get_f32(rs1).min(self.get_f32(rs2))),
-                    1 => self.set_f32(rd, self.get_f32(rs1).max(self.get_f32(rs2))),
-                    _ => panic!("invalid instruction"),
-                },
-                0b1100000 => match rs2 {
-                    0 => {
-                        self.x[rd] =
-                            self.round_rm_f32(funct3, false, self.get_f32(rs1)) as i32 as u32
-                    }
-                    1 => self.x[rd] = self.round_rm_f32(funct3, false, self.get_f32(rs1)) as u32,
-                    _ => panic!("invalid instruction"),
-                },
-                0b1110000 => match funct3 {
-                    0 => {
-                        self.x[rd] = self.get_f32(rs1).to_bits();
-                    }
-                    1 => {
-                        let float = self.get_f32(rs1);
-                        let mut class: u32 = 0;
 
-                        if float.is_nan() {
-                            let bits = float.to_bits();
-                            let signal = (bits >> 22) & 1;
-                            if signal == 1 {
-                                class |= 1 << 8;
-                            } else {
-                                class |= 1 << 9;
-                            }
-                        } else if float.is_sign_positive() {
-                            if float == 0.0 {
-                                class |= 1 << 4;
-                            } else if float.is_subnormal() {
-                                class |= 1 << 5;
-                            } else if float.is_normal() {
-                                class |= 1 << 6;
-                            } else if float == f32::INFINITY {
-                                class |= 1 << 7;
-                            }
-                        } else if float == -0.0 {
-                            class |= 1 << 3;
-                        } else if float.is_subnormal() {
-                            class |= 1 << 2;
-                        } else if float.is_normal() {
-                            class |= 1 << 1;
-                        } else if float == f32::NEG_INFINITY {
-                            class |= 1;
-                        }
+                    let mut output = self.get_f32(rs1).mul_add(self.get_f32(rs2), adder);
+                    if !positive {
+                        output = -output;
+                    }
 
-                        self.x[rd] = class;
-                    }
-                    _ => panic!("invalid instruction"),
-                },
-                0b1010000 => match funct3 {
-                    2 => self.x[rd] = (self.get_f32(rs1) == self.get_f32(rs2)) as u32,
-                    1 => self.x[rd] = (self.get_f32(rs1) < self.get_f32(rs2)) as u32,
-                    0 => self.x[rd] = (self.get_f32(rs1) <= self.get_f32(rs2)) as u32,
-                    _ => panic!("invalid instruction"),
-                },
-                0b1101000 => match rs2 {
-                    0 => self.set_f32(
-                        rd,
-                        self.round_rm_f32(funct3, false, self.x[rs1] as i32 as f32),
-                    ),
-                    1 => self.set_f32(rd, self.round_rm_f32(funct3, false, self.x[rs1] as f32)),
-                    _ => panic!("invalid instruction"),
-                },
-                0b1111000 => self.set_f32(rd, f32::from_bits(self.x[rs1])),
-                // RV32D
-                0b0000001 => {
-                    self.f[rd] = self.round_rm_f64(funct3, false, self.f[rs1] + self.f[rs2])
-                }
-                0b0000101 => {
-                    self.f[rd] = self.round_rm_f64(funct3, false, self.f[rs1] - self.f[rs2])
-                }
-                0b0001001 => {
-                    self.f[rd] = self.round_rm_f64(funct3, false, self.f[rs1] * self.f[rs2])
-                }
-                0b0001101 => {
-                    self.f[rd] = self.round_rm_f64(funct3, false, self.f[rs1] / self.f[rs2])
-                }
-                0b0101101 if rs2 == 0 => {
-                    self.f[rd] = self.round_rm_f64(funct3, false, self.f[rs1].sqrt())
-                }
-                0b0010001 => match funct3 {
-                    0 => self.f[rd] = self.f[rs1].copysign(self.f[rs2]),
-                    1 => self.f[rd] = self.f[rs1].copysign(-self.f[rs2]),
-                    2 => {
-                        let sign = (self.f[rs1].to_bits() >> 63) ^ (self.f[rs2].to_bits() >> 63);
-                        self.f[rd] =
-                            f64::from_bits((sign << 63) | ((self.f[rs1].to_bits() << 1) >> 1));
-                    }
-                    _ => panic!("invalid instruction"),
-                },
-                0b0010101 => match funct3 {
-                    0 => self.f[rd] = self.f[rs1].min(self.f[rs2]),
-                    1 => self.f[rd] = self.f[rs1].max(self.f[rs2]),
-                    _ => panic!("invalid instruction"),
-                },
-                0b0100000 if rs2 == 1 => {
-                    print!("fcvt.s.d x{}, x{}", rd, rs1);
-                    self.f[rd] = self.round_rm_f64(funct3, false, self.get_f32(rs1) as f64);
-                    println!(" | rd: {}", self.f[rd]);
-                }
-                0b0100001 if rs2 == 0 => {
-                    print!("fcvt.d.s x{}, x{}", rd, rs1);
-                    self.set_f32(rd, self.round_rm_f32(funct3, false, self.f[rs1] as f32));
+                    self.set_f32(rd, self.round_f32(rounding, false, output));
+
                     println!(" | rd: {}", self.get_f32(rd));
                 }
-                0b1010001 => match funct3 {
-                    2 => self.x[rd] = (self.f[rs1] == self.f[rs2]) as u32,
-                    1 => self.x[rd] = (self.f[rs1] < self.f[rs2]) as u32,
-                    0 => self.x[rd] = (self.f[rs1] <= self.f[rs2]) as u32,
-                    _ => panic!("invalid instruction"),
-                },
-                0b1110001 if rs2 == 0 && funct3 == 1 => {
-                    print!("fclass.d x{}, x{}", rd, rs1);
-                    let float = self.f[rs1];
-                    let mut class: u32 = 0;
-
-                    if float.is_nan() {
-                        let bits = float.to_bits();
-                        let signal = (bits >> 22) & 1;
-                        if signal == 1 {
-                            class |= 1 << 8;
-                        } else {
-                            class |= 1 << 9;
-                        }
-                    } else if float.is_sign_positive() {
-                        if float == 0.0 {
-                            class |= 1 << 4;
-                        } else if float.is_subnormal() {
-                            class |= 1 << 5;
-                        } else if float.is_normal() {
-                            class |= 1 << 6;
-                        } else if float == f64::INFINITY {
-                            class |= 1 << 7;
-                        }
-                    } else if float == -0.0 {
-                        class |= 1 << 3;
-                    } else if float.is_subnormal() {
-                        class |= 1 << 2;
-                    } else if float.is_normal() {
-                        class |= 1 << 1;
-                    } else if float == f64::NEG_INFINITY {
-                        class |= 1;
+                FPPrecision::Double => {
+                    let mut adder = self.f[rs3];
+                    if !add {
+                        adder = -adder;
                     }
 
-                    self.x[rd] = class;
+                    let mut output = self.f[rs1].mul_add(self.f[rs2], adder);
+                    if !positive {
+                        output = -output;
+                    }
+
+                    self.f[rd] = self.round_f64(rounding, false, output);
+
+                    println!(" | rd: {}", self.f[rd]);
+                }
+            },
+            // RV32F
+            Instruction::FPSingleOp(FPSingleOp {
+                rd,
+                rs1,
+                rs2,
+                mode,
+                rounding,
+                ret,
+            }) => match ret {
+                FPReturnMode::Double => unreachable!(),
+                FPReturnMode::Single => {
+                    self.set_f32(
+                        rd,
+                        match mode {
+                            FPSingleOpMode::Add => self.round_f32(
+                                rounding,
+                                false,
+                                self.get_f32(rs1) + self.get_f32(rs2),
+                            ),
+                            FPSingleOpMode::Subtract => self.round_f32(
+                                rounding,
+                                false,
+                                self.get_f32(rs1) - self.get_f32(rs2),
+                            ),
+                            FPSingleOpMode::Multiply => self.round_f32(
+                                rounding,
+                                false,
+                                self.get_f32(rs1) * self.get_f32(rs2),
+                            ),
+                            FPSingleOpMode::Divide => self.round_f32(
+                                rounding,
+                                false,
+                                self.get_f32(rs1) / self.get_f32(rs2),
+                            ),
+                            FPSingleOpMode::SquareRoot => {
+                                self.round_f32(rounding, false, self.get_f32(rs1).sqrt())
+                            }
+                            FPSingleOpMode::SignInject => {
+                                self.get_f32(rs1).copysign(self.get_f32(rs2))
+                            }
+                            FPSingleOpMode::SignInjectNot => {
+                                self.get_f32(rs1).copysign(-self.get_f32(rs2))
+                            }
+                            FPSingleOpMode::SignInjectExclusiveOr => {
+                                let sign = (self.get_f32(rs1).to_bits() >> 31)
+                                    ^ (self.get_f32(rs2).to_bits() >> 31);
+                                f32::from_bits(
+                                    (sign << 31) | ((self.get_f32(rs1).to_bits() << 1) >> 1),
+                                )
+                            }
+                            FPSingleOpMode::Minimum => self.get_f32(rs1).min(self.get_f32(rs2)),
+                            FPSingleOpMode::Maximum => self.get_f32(rs1).max(self.get_f32(rs2)),
+                            FPSingleOpMode::ConvertSingleFromWord => {
+                                self.round_f32(rounding, false, self.x[rs1] as i32 as f32)
+                            }
+                            FPSingleOpMode::ConvertSingleFromUnsignedWord => {
+                                self.round_f32(rounding, false, self.x[rs1] as f32)
+                            }
+                            FPSingleOpMode::MoveSingleFromWord => f32::from_bits(self.x[rs1]),
+                            _ => unreachable!(),
+                        },
+                    );
+
+                    println!(" | rd: {}", self.get_f32(rd));
+                }
+                FPReturnMode::Integer => {
+                    self.x[rd] = match mode {
+                        FPSingleOpMode::Equals => (self.get_f32(rs1) == self.get_f32(rs2)) as u32,
+                        FPSingleOpMode::LessThan => (self.get_f32(rs1) < self.get_f32(rs2)) as u32,
+                        FPSingleOpMode::LessThanOrEqual => {
+                            (self.get_f32(rs1) <= self.get_f32(rs2)) as u32
+                        }
+                        FPSingleOpMode::Class => {
+                            let float = self.get_f32(rs1);
+                            let mut class = 0u32;
+
+                            if float.is_nan() {
+                                let bits = float.to_bits();
+                                let signal = (bits >> 22) & 1;
+                                if signal == 1 {
+                                    class |= 1 << 8;
+                                } else {
+                                    class |= 1 << 9;
+                                }
+                            } else if float.is_sign_positive() {
+                                if float == 0.0 {
+                                    class |= 1 << 4;
+                                } else if float.is_subnormal() {
+                                    class |= 1 << 5;
+                                } else if float.is_normal() {
+                                    class |= 1 << 6;
+                                } else if float == f32::INFINITY {
+                                    class |= 1 << 7;
+                                }
+                            } else if float == -0.0 {
+                                class |= 1 << 3;
+                            } else if float.is_subnormal() {
+                                class |= 1 << 2;
+                            } else if float.is_normal() {
+                                class |= 1 << 1;
+                            } else if float == f32::NEG_INFINITY {
+                                class |= 1;
+                            }
+
+                            class
+                        }
+                        FPSingleOpMode::ConvertWordFromSingle => {
+                            self.round_f32(rounding, false, self.get_f32(rs1)) as i32 as u32
+                        }
+                        FPSingleOpMode::ConvertUnsignedWordFromSingle => {
+                            self.round_f32(rounding, false, self.get_f32(rs1)) as u32
+                        }
+                        FPSingleOpMode::MoveWordFromSingle => self.get_f32(rs1).to_bits(),
+                        _ => unreachable!(),
+                    };
+
+                    println!(" | rd: {}", self.x[rd]);
+                }
+            },
+            // RV32D
+            Instruction::FPDoubleOp(FPDoubleOp {
+                rd,
+                rs1,
+                rs2,
+                mode,
+                rounding,
+                ret,
+            }) => match ret {
+                FPReturnMode::Double => {
+                    self.f[rd] = match mode {
+                        FPDoubleOpMode::Add => {
+                            self.round_f64(rounding, false, self.f[rs1] + self.f[rs2])
+                        }
+                        FPDoubleOpMode::Subtract => {
+                            self.round_f64(rounding, false, self.f[rs1] - self.f[rs2])
+                        }
+                        FPDoubleOpMode::Multiply => {
+                            self.round_f64(rounding, false, self.f[rs1] * self.f[rs2])
+                        }
+                        FPDoubleOpMode::Divide => {
+                            self.round_f64(rounding, false, self.f[rs1] / self.f[rs2])
+                        }
+                        FPDoubleOpMode::SquareRoot => {
+                            self.round_f64(rounding, false, self.f[rs1].sqrt())
+                        }
+                        FPDoubleOpMode::SignInject => self.f[rs1].copysign(self.f[rs2]),
+                        FPDoubleOpMode::SignInjectNot => self.f[rs1].copysign(-self.f[rs2]),
+                        FPDoubleOpMode::SignInjectExclusiveOr => {
+                            let sign =
+                                (self.f[rs1].to_bits() >> 63) ^ (self.f[rs2].to_bits() >> 63);
+                            f64::from_bits((sign << 63) | ((self.f[rs1].to_bits() << 1) >> 1))
+                        }
+                        FPDoubleOpMode::Minimum => self.f[rs1].min(self.f[rs2]),
+                        FPDoubleOpMode::Maximum => self.f[rs1].max(self.f[rs2]),
+                        FPDoubleOpMode::ConvertDoubleFromSingle => self.get_f32(rs1) as f64,
+                        FPDoubleOpMode::ConvertDoubleFromWord => {
+                            self.round_f64(rounding, false, self.x[rs1] as i32 as i64 as f64)
+                        }
+                        FPDoubleOpMode::ConvertDoubleFromUnsignedWord => {
+                            self.round_f64(rounding, false, self.x[rs1] as u64 as f64)
+                        }
+                        _ => unreachable!(),
+                    };
+
+                    println!(" | rd: {}", self.f[rd]);
+                }
+                FPReturnMode::Single => {
+                    self.set_f32(
+                        rd,
+                        match mode {
+                            FPDoubleOpMode::ConvertSingleFromDouble => {
+                                self.round_f32(rounding, false, self.f[rs1] as f32)
+                            }
+                            _ => unreachable!(),
+                        },
+                    );
+
+                    println!(" | rd: {}", self.get_f32(rd));
+                }
+                FPReturnMode::Integer => {
+                    self.x[rd] = match mode {
+                        FPDoubleOpMode::Equals => (self.f[rs1] == self.f[rs2]) as u32,
+                        FPDoubleOpMode::LessThan => (self.f[rs1] < self.f[rs2]) as u32,
+                        FPDoubleOpMode::LessThanOrEqual => (self.f[rs1] <= self.f[rs2]) as u32,
+                        FPDoubleOpMode::Class => {
+                            let float = self.f[rs1];
+                            let mut class: u32 = 0;
+
+                            if float.is_nan() {
+                                let bits = float.to_bits();
+                                let signal = (bits >> 22) & 1;
+                                if signal == 1 {
+                                    class |= 1 << 8;
+                                } else {
+                                    class |= 1 << 9;
+                                }
+                            } else if float.is_sign_positive() {
+                                if float == 0.0 {
+                                    class |= 1 << 4;
+                                } else if float.is_subnormal() {
+                                    class |= 1 << 5;
+                                } else if float.is_normal() {
+                                    class |= 1 << 6;
+                                } else if float == f64::INFINITY {
+                                    class |= 1 << 7;
+                                }
+                            } else if float == -0.0 {
+                                class |= 1 << 3;
+                            } else if float.is_subnormal() {
+                                class |= 1 << 2;
+                            } else if float.is_normal() {
+                                class |= 1 << 1;
+                            } else if float == f64::NEG_INFINITY {
+                                class |= 1;
+                            }
+
+                            class
+                        }
+                        FPDoubleOpMode::ConvertWordFromDouble => {
+                            self.round_f64(rounding, false, self.f[rs1]) as i64 as i32 as u32
+                        }
+                        FPDoubleOpMode::ConvertUnsignedWordFromDouble => {
+                            self.round_f64(rounding, false, self.f[rs1]) as u64 as u32
+                        }
+                        _ => unreachable!(),
+                    };
+
                     println!(" | rd: {}", self.x[rd] as i32);
                 }
-                0b1100001 if rs2 == 0 => {
-                    print!("fcvt.w.d x{}, x{}", rd, rs1);
-                    self.x[rd] = self.round_rm_f64(funct3, false, self.f[rs1]) as i64 as i32 as u32;
-                    println!(" | rd: {}", self.f[rd]);
-                }
-                0b1100001 if rs2 == 1 => {
-                    print!("fcvt.wu.d x{}, x{}", rd, rs1);
-                    self.x[rd] = self.round_rm_f64(funct3, false, self.f[rs1]) as u64 as u32;
-                    println!(" | rd: {}", self.f[rd]);
-                }
-                0b1101001 if rs2 == 0 => {
-                    print!("fcvt.d.w x{}, x{}", rd, rs1);
-                    self.f[rd] = self.round_rm_f64(funct3, false, self.x[rs1] as i32 as i64 as f64);
-                    println!(" | rd: {}", self.f[rd]);
-                }
-                0b1101001 if rs2 == 1 => {
-                    print!("fcvt.d.wu x{}, x{}", rd, rs1);
-                    self.f[rd] = self.round_rm_f64(funct3, false, self.x[rs1] as u64 as f64);
-                    println!(" | rd: {}", self.f[rd]);
-                }
-                _ => panic!("invalid instruction"),
             },
-            _ => panic!("invalid instruction"),
         }
     }
 
     // Perform rounding based on RM table. (f32)
     #[inline]
-    pub fn round_rm_f32(&self, rm: u32, frm: bool, value: f32) -> f32 {
-        match rm {
-            0b000 => value.round_ties_even(),
-            0b001 => value.trunc(),
-            0b010 => value.floor(),
-            0b011 => value.ceil(),
-            0b111 if !frm => self.round_rm_f32((self.csrs[0x003] >> 5) & 0b111, true, value),
-            _ => panic!("invalid rounding mode"),
-        }
+    pub fn round_f32(&self, rm: FPRoundingMode, frm: bool, value: f32) -> f32 {
+        rm.apply_f32((self.csrs[0x003] >> 5) & 0b111, frm, value)
     }
 
     // Perform rounding based on RM table. (f64)
     #[inline]
-    pub fn round_rm_f64(&self, rm: u32, frm: bool, value: f64) -> f64 {
-        match rm {
-            0b000 => value.round_ties_even(),
-            0b001 => value.trunc(),
-            0b010 => value.floor(),
-            0b011 => value.ceil(),
-            0b111 if !frm => self.round_rm_f64((self.csrs[0x003] >> 5) & 0b111, true, value),
-            _ => panic!("invalid rounding mode"),
-        }
+    pub fn round_f64(&self, rm: FPRoundingMode, frm: bool, value: f64) -> f64 {
+        rm.apply_f64((self.csrs[0x003] >> 5) & 0b111, frm, value)
     }
 
     // Pull a NaN-boxed f32 from f and NaN-unbox it.

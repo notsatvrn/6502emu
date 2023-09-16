@@ -2,7 +2,7 @@ use std::fmt::Display;
 pub use std::sync::atomic::Ordering;
 
 // RV32I - branches
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct Branch {
     pub rs1: usize,
     pub rs2: usize,
@@ -21,7 +21,7 @@ impl Display for Branch {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum BranchMode {
     Equal,
     NotEqual,
@@ -50,7 +50,7 @@ impl Display for BranchMode {
 }
 
 // RV32I - load
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct Load {
     pub rd: usize,
     pub rs1: usize,
@@ -69,7 +69,7 @@ impl Display for Load {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum LoadMode {
     Byte,
     HalfWord,
@@ -95,7 +95,7 @@ impl Display for LoadMode {
 }
 
 // RV32I - store
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct Store {
     pub rs1: usize,
     pub rs2: usize,
@@ -114,7 +114,7 @@ impl Display for Store {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum StoreMode {
     Byte,
     HalfWord,
@@ -136,7 +136,7 @@ impl Display for StoreMode {
 }
 
 // RV32I - immediate integer operation
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct IMMOp {
     pub rd: usize,
     pub rs1: usize,
@@ -155,7 +155,7 @@ impl Display for IMMOp {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum IMMOpMode {
     Add,
     SetLessThan,
@@ -183,7 +183,7 @@ impl Display for IMMOpMode {
 }
 
 // RV32I - shift mode
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum ShiftMode {
     LogicalLeft,
     LogicalRight,
@@ -205,7 +205,7 @@ impl Display for ShiftMode {
 }
 
 // RV32I - immediate integer shift
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct IMMShift {
     pub rd: usize,
     pub rs1: usize,
@@ -225,7 +225,7 @@ impl Display for IMMShift {
 }
 
 // RV32I - integer operation
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct IntOp {
     pub rd: usize,
     pub rs1: usize,
@@ -244,7 +244,7 @@ impl Display for IntOp {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum IntOpMode {
     Add,
     Subtract,
@@ -274,7 +274,7 @@ impl Display for IntOpMode {
 }
 
 // RV32I - integer shift
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct IntShift {
     pub rd: usize,
     pub rs1: usize,
@@ -294,7 +294,7 @@ impl Display for IntShift {
 }
 
 // Zicsr
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct CSR {
     pub rd: usize,
     pub source: CSRSource,
@@ -319,7 +319,7 @@ impl Display for CSR {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum CSRSource {
     Register(usize),
     Immediate(u32),
@@ -335,7 +335,7 @@ impl Display for CSRSource {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum CSRMode {
     ReadWrite,
     ReadSetBits,
@@ -358,7 +358,7 @@ impl Display for CSRMode {
 }
 
 // RV32M
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct MulOp {
     pub rd: usize,
     pub rs1: usize,
@@ -377,7 +377,7 @@ impl Display for MulOp {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum MulOpMode {
     Multiply,
     MultiplyHull,
@@ -410,7 +410,7 @@ impl Display for MulOpMode {
 }
 
 // RV32A
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct Atomic {
     pub rd: usize,
     pub rs1: usize,
@@ -444,7 +444,7 @@ impl Display for Atomic {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum AtomicMode {
     LoadReservedWord,
     StoreConditionalWord,
@@ -483,7 +483,7 @@ impl Display for AtomicMode {
 }
 
 // RV32F/D - precision
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum FPPrecision {
     Single,
     Double,
@@ -504,7 +504,7 @@ impl Display for FPPrecision {
 }
 
 // RV32F/D - load
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct FPLoad {
     pub rd: usize,
     pub rs1: usize,
@@ -530,7 +530,7 @@ impl Display for FPLoad {
 }
 
 // RV32F/D - store
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct FPStore {
     pub rs1: usize,
     pub rs2: usize,
@@ -555,8 +555,72 @@ impl Display for FPStore {
     }
 }
 
+// RV32F/D - rounding mode
+#[derive(Clone, Copy, Debug)]
+pub enum FPRoundingMode {
+    NearestTiesEven,
+    Zero,
+    Down,
+    Up,
+    NearestMaxMagnitude,
+    Dynamic,
+}
+
+impl FPRoundingMode {
+    #[inline]
+    pub fn decode(rm: u32) -> FPRoundingMode {
+        match rm {
+            0b000 => FPRoundingMode::NearestTiesEven,
+            0b001 => FPRoundingMode::Zero,
+            0b010 => FPRoundingMode::Down,
+            0b011 => FPRoundingMode::Up,
+            0b100 => FPRoundingMode::NearestMaxMagnitude,
+            0b111 => FPRoundingMode::Dynamic,
+            _ => panic!("invalid rounding mode"),
+        }
+    }
+
+    #[inline]
+    pub fn apply_f64(&self, csr_rm: u32, frm: bool, value: f64) -> f64 {
+        match self {
+            FPRoundingMode::NearestTiesEven => value.round_ties_even(),
+            FPRoundingMode::Zero => value.trunc(),
+            FPRoundingMode::Down => value.floor(),
+            FPRoundingMode::Up => value.ceil(),
+            FPRoundingMode::NearestMaxMagnitude => value.round(),
+            FPRoundingMode::Dynamic if !frm => {
+                FPRoundingMode::decode(csr_rm).apply_f64(0, true, value)
+            }
+            _ => panic!("invalid rounding mode"),
+        }
+    }
+
+    #[inline]
+    pub fn apply_f32(&self, csr_rm: u32, frm: bool, value: f32) -> f32 {
+        match self {
+            FPRoundingMode::NearestTiesEven => value.round_ties_even(),
+            FPRoundingMode::Zero => value.trunc(),
+            FPRoundingMode::Down => value.floor(),
+            FPRoundingMode::Up => value.ceil(),
+            FPRoundingMode::NearestMaxMagnitude => value.round(),
+            FPRoundingMode::Dynamic if !frm => {
+                FPRoundingMode::decode(csr_rm).apply_f32(0, true, value)
+            }
+            _ => panic!("invalid rounding mode"),
+        }
+    }
+}
+
+// RV32F/D - return mode
+#[derive(Clone, Copy, Debug)]
+pub enum FPReturnMode {
+    Double,
+    Single,
+    Integer,
+}
+
 // RV32F/D - fused multiply op
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct FPFusedMultiplyOp {
     pub rd: usize,
     pub rs1: usize,
@@ -564,6 +628,7 @@ pub struct FPFusedMultiplyOp {
     pub rs3: usize,
     pub add: bool,
     pub positive: bool,
+    pub rounding: FPRoundingMode,
     pub precision: FPPrecision,
 }
 
@@ -593,15 +658,24 @@ impl Display for FPFusedMultiplyOp {
 }
 
 // RV32F
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct FPSingleOp {
     pub rd: usize,
     pub rs1: usize,
     pub rs2: usize,
+    pub rounding: FPRoundingMode,
     pub mode: FPSingleOpMode,
+    pub ret: FPReturnMode,
 }
 
-#[derive(Clone, Debug)]
+impl Display for FPSingleOp {
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        unimplemented!()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 pub enum FPSingleOpMode {
     Add,
     Subtract,
@@ -613,28 +687,59 @@ pub enum FPSingleOpMode {
     SignInjectExclusiveOr,
     Minimum,
     Maximum,
-    ConvertWordFromSingle,
-    ConvertUnsignedWordFromSingle,
     Equals,
     LessThan,
     LessThanOrEqual,
     Class,
+    ConvertWordFromSingle,
+    ConvertUnsignedWordFromSingle,
     ConvertSingleFromWord,
     ConvertSingleFromUnsignedWord,
     MoveWordFromSingle,
     MoveSingleFromWord,
 }
 
+impl FPSingleOpMode {
+    fn return_mode(&self) -> FPReturnMode {
+        match self {
+            Self::Equals
+            | Self::LessThan
+            | Self::LessThanOrEqual
+            | Self::Class
+            | Self::ConvertWordFromSingle
+            | Self::ConvertUnsignedWordFromSingle
+            | Self::MoveWordFromSingle => FPReturnMode::Integer,
+            _ => FPReturnMode::Single,
+        }
+    }
+}
+
+impl Display for FPSingleOpMode {
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        unimplemented!()
+    }
+}
+
 // RV32D
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct FPDoubleOp {
     pub rd: usize,
     pub rs1: usize,
     pub rs2: usize,
+    pub rounding: FPRoundingMode,
     pub mode: FPDoubleOpMode,
+    pub ret: FPReturnMode,
 }
 
-#[derive(Clone, Debug)]
+impl Display for FPDoubleOp {
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        unimplemented!()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 pub enum FPDoubleOpMode {
     Add,
     Subtract,
@@ -646,20 +751,42 @@ pub enum FPDoubleOpMode {
     SignInjectExclusiveOr,
     Minimum,
     Maximum,
-    ConvertSingleFromDouble,
-    ConvertDoubleFromSingle,
     Equals,
     LessThan,
     LessThanOrEqual,
     Class,
+    ConvertSingleFromDouble,
+    ConvertDoubleFromSingle,
     ConvertWordFromDouble,
     ConvertUnsignedWordFromDouble,
     ConvertDoubleFromWord,
     ConvertDoubleFromUnsignedWord,
 }
 
+impl FPDoubleOpMode {
+    fn return_mode(&self) -> FPReturnMode {
+        match self {
+            Self::Equals
+            | Self::LessThan
+            | Self::LessThanOrEqual
+            | Self::Class
+            | Self::ConvertWordFromDouble
+            | Self::ConvertUnsignedWordFromDouble => FPReturnMode::Integer,
+            Self::ConvertSingleFromDouble => FPReturnMode::Single,
+            _ => FPReturnMode::Double,
+        }
+    }
+}
+
+impl Display for FPDoubleOpMode {
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        unimplemented!()
+    }
+}
+
 // RV32 instruction
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum Instruction {
     LUI(usize, u32),                    // rd, immediate
     AUIPC(usize, u32),                  // rd, immediate
@@ -686,15 +813,6 @@ pub enum Instruction {
     FPFusedMultiplyOp(FPFusedMultiplyOp),
     FPSingleOp(FPSingleOp),
     FPDoubleOp(FPDoubleOp),
-}
-
-#[inline]
-pub fn fmt_rrr(
-    f: &mut std::fmt::Formatter<'_>,
-    name: &str,
-    regs: (usize, usize, usize),
-) -> std::fmt::Result {
-    write!(f, "{} x{}, x{}, x{}", name, regs.0, regs.1, regs.2)
 }
 
 impl Display for Instruction {
@@ -726,8 +844,8 @@ impl Display for Instruction {
             Instruction::FPLoad(load) => write!(f, "{}", load),
             Instruction::FPStore(store) => write!(f, "{}", store),
             Instruction::FPFusedMultiplyOp(op) => write!(f, "{}", op),
-            Instruction::FPSingleOp(FPSingleOp { rd, rs1, rs2, mode }) => unimplemented!(),
-            Instruction::FPDoubleOp(FPDoubleOp { rd, rs1, rs2, mode }) => unimplemented!(),
+            Instruction::FPSingleOp(op) => write!(f, "{}", op),
+            Instruction::FPDoubleOp(op) => write!(f, "{}", op),
         }
     }
 }
@@ -1050,17 +1168,15 @@ pub fn decode_full(inst: u32) -> Instruction {
                 FPPrecision::Double
             };
 
-            let add = opcode == 0b1000011 || opcode == 0b1001111;
-            let positive = opcode == 0b1000011 || opcode == 0b1000111;
-
             Instruction::FPFusedMultiplyOp(FPFusedMultiplyOp {
                 rd,
                 rs1,
                 rs2,
                 rs3,
-                add,
-                positive,
+                add: opcode == 0b1000011 || opcode == 0b1001111,
+                positive: opcode == 0b1000011 || opcode == 0b1000111,
                 precision,
+                rounding: FPRoundingMode::decode(funct3),
             })
         }
         // RV32F
@@ -1084,13 +1200,6 @@ pub fn decode_full(inst: u32) -> Instruction {
                         FPSingleOpMode::Maximum
                     }
                 }
-                0b1100001 if (rs2 >> 1) == 0 => {
-                    if funct3 == 0 {
-                        FPSingleOpMode::ConvertWordFromSingle
-                    } else {
-                        FPSingleOpMode::ConvertUnsignedWordFromSingle
-                    }
-                }
                 0b1010000 => match funct3 {
                     2 => FPSingleOpMode::Equals,
                     1 => FPSingleOpMode::LessThan,
@@ -1099,9 +1208,16 @@ pub fn decode_full(inst: u32) -> Instruction {
                 },
                 0b1110000 if rs2 == 0 && (funct3 >> 1) == 0 => {
                     if funct3 == 0 {
-                        FPSingleOpMode::MoveSingleFromWord
+                        FPSingleOpMode::MoveWordFromSingle
                     } else {
                         FPSingleOpMode::Class
+                    }
+                }
+                0b1100001 if (rs2 >> 1) == 0 => {
+                    if funct3 == 0 {
+                        FPSingleOpMode::ConvertWordFromSingle
+                    } else {
+                        FPSingleOpMode::ConvertUnsignedWordFromSingle
                     }
                 }
                 0b1101000 if (rs2 >> 1) == 0 => {
@@ -1111,11 +1227,18 @@ pub fn decode_full(inst: u32) -> Instruction {
                         FPSingleOpMode::ConvertSingleFromUnsignedWord
                     }
                 }
-                0b1111000 if rs2 == 0 && funct3 == 0 => FPSingleOpMode::MoveWordFromSingle,
+                0b1111000 if rs2 == 0 && funct3 == 0 => FPSingleOpMode::MoveSingleFromWord,
                 _ => panic!("illegal instruction"),
             };
 
-            Instruction::FPSingleOp(FPSingleOp { rd, rs1, rs2, mode })
+            Instruction::FPSingleOp(FPSingleOp {
+                rd,
+                rs1,
+                rs2,
+                mode,
+                rounding: FPRoundingMode::decode(funct3),
+                ret: mode.return_mode(),
+            })
         }
         // RV32D
         0b1010011 if funct7 == 0b0100000 || funct2 == 0b01 => {
@@ -1138,14 +1261,14 @@ pub fn decode_full(inst: u32) -> Instruction {
                         FPDoubleOpMode::Maximum
                     }
                 }
-                0b0100000 if rs2 == 1 => FPDoubleOpMode::ConvertSingleFromDouble,
-                0b0100001 if rs2 == 0 => FPDoubleOpMode::ConvertDoubleFromSingle,
                 0b1010001 => match funct3 {
                     2 => FPDoubleOpMode::Equals,
                     1 => FPDoubleOpMode::LessThan,
                     0 => FPDoubleOpMode::LessThanOrEqual,
                     _ => panic!("illegal instruction"),
                 },
+                0b0100000 if rs2 == 1 => FPDoubleOpMode::ConvertSingleFromDouble,
+                0b0100001 if rs2 == 0 => FPDoubleOpMode::ConvertDoubleFromSingle,
                 0b1110001 if rs2 == 0 && funct3 == 1 => FPDoubleOpMode::Class,
                 0b1100001 if (rs2 >> 1) == 0 => {
                     if funct3 == 0 {
@@ -1164,7 +1287,14 @@ pub fn decode_full(inst: u32) -> Instruction {
                 _ => panic!("illegal instruction"),
             };
 
-            Instruction::FPDoubleOp(FPDoubleOp { rd, rs1, rs2, mode })
+            Instruction::FPDoubleOp(FPDoubleOp {
+                rd,
+                rs1,
+                rs2,
+                mode,
+                rounding: FPRoundingMode::decode(funct3),
+                ret: mode.return_mode(),
+            })
         }
         _ => panic!("illegal instruction"),
     }
