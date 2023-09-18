@@ -7,7 +7,8 @@ use vm_memory::{
 
 pub static BUS: LazyLock<RwLock<Bus>> = LazyLock::new(|| RwLock::new(Bus::new(0)));
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, bytemuck::NoUninit, PartialEq, Eq)]
+#[repr(C)]
 pub struct Region(pub u64, pub usize);
 
 #[derive(Clone)]
@@ -25,7 +26,7 @@ impl Dram {
         }
     }
 
-    pub fn add_region(&mut self, region: &Region) {
+    pub fn add_region(&self, region: &Region) {
         if (region.0 + region.1 as u64) > self.size {
             panic!("out of bounds memory access");
         }
@@ -35,11 +36,10 @@ impl Dram {
                 .unwrap(),
         );
         let memory = self.memory.memory().insert_region(mmap).unwrap();
-        let guard = self.memory.lock().unwrap();
-        guard.replace(memory);
+        self.memory.lock().unwrap().replace(memory);
     }
 
-    pub fn remove_region(&mut self, region: &Region) {
+    pub fn remove_region(&self, region: &Region) {
         if (region.0 + region.1 as u64) > self.size {
             panic!("out of bounds memory access");
         }
@@ -50,8 +50,7 @@ impl Dram {
             .remove_region(GuestAddress(region.0), region.1 as u64)
             .unwrap()
             .0;
-        let guard = self.memory.lock().unwrap();
-        guard.replace(memory);
+        self.memory.lock().unwrap().replace(memory);
     }
 }
 

@@ -5,7 +5,7 @@ pub mod cpu;
 pub mod instructions;
 pub mod io;
 
-use cpu::riscv32_2::*;
+use cpu::riscv32::*;
 use std::env;
 use std::time::Instant;
 
@@ -23,8 +23,8 @@ pub fn convert(compiled: Vec<u32>) -> Vec<u8> {
 //#[tokio::main]
 fn main() {
     let args: Vec<String> = env::args().collect();
-    let cores = num_cpus::get();
-    let mut cpu = Cpu::init(cores, 1, 1024 * 1024);
+    let hart_count = num_cpus::get();
+    let mut cpu = Cpu::init(hart_count, 1024 * 1024);
     #[cfg(feature = "debug")]
     println!("CPU Initialized.");
 
@@ -68,22 +68,19 @@ fn main() {
             }
         }
 
-        cpu.prepare_hart(0, 0, binary.clone());
+        cpu.prepare_hart(0, binary.clone());
 
-        let mut core = cpu.cores[0].lock();
-        let mut hart = core.harts[0].lock();
+        let mut hart = cpu.harts[0].lock();
 
         let now = Instant::now();
 
         while (hart.pc as usize) < hart.region.1 {
-            let inst_u32 = hart.fetch();
-            let inst = hart.decode(inst_u32);
+            let (inst_u32, inst) = hart.fetch();
+            //let oooe = self.oooe.cycle(inst);
             hart.execute(inst_u32, inst);
         }
 
-        drop(hart);
-
-        core.stop_hart(0);
+        hart.reset();
 
         /*
         let mut i: usize = 0;

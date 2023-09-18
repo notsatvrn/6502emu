@@ -1,20 +1,16 @@
-use crate::instructions::riscv32::*;
-use crate::io::{Region, BUS};
-use ahash::{AHashMap, AHashSet};
 use parking_lot::Mutex;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::sync::Arc;
-use vm_memory::{Bytes, GuestAddress, GuestAddressSpace, GuestMemory, GuestMemoryRegion};
+use vm_memory::{GuestAddressSpace, GuestMemory, GuestMemoryRegion, GuestAddress, Bytes};
 
-pub type ThreadSafeHart = Arc<Mutex<Hart>>;
+use crate::instructions::riscv32::*;
+use crate::io::*;
+use std::{collections::BTreeSet, sync::Arc};
 
 pub struct Cpu {
-    pub harts: Vec<ThreadSafeHart>,
-    pub running: AHashSet<usize>,
+    pub cores: Vec<Arc<Mutex<Core>>>,
 }
 
 impl Cpu {
-    pub fn init(hart_count: usize, memory_size: u32) -> Self {
+    pub fn init(core_count: usize, hart_count: usize, memory_size: u32) -> Self {
         BUS.write().dram.size = memory_size as u64;
 
         let mut csrs = [0u32; 4096];
@@ -26,34 +22,42 @@ impl Cpu {
         // machine trap setup
         csrs[0x301] = 0b01000000000000000001000100101100; // misa
 
-        let mut i: usize = 0;
-        let mut harts = Vec::new();
-        while i < hart_count {
-            // hart-specific csrs
-            csrs[0xF14] = i as u32; // mhartid
+        let mut cores = Vec::new();
+        let mut core_i: usize = 0;
+        let mut hart_i: usize = 0;
+        while core_i < core_count {
+            let mut harts = Vec::new();
 
-            harts.push(Arc::new(Mutex::new(Hart {
-                region: Region(0, 0),
-                x: [0; 32],
-                f: [0.0; 32],
-                csrs,
-                pc: 0,
-                skip: BTreeSet::new(),
-                cache: BTreeMap::new(),
-                oooe: OoOEHelper::new(),
+            while hart_i < hart_count * (core_i + 1) {
+                // hart-specific csrs
+                csrs[0xF14] = hart_i as u32; // mhartid
+
+                harts.push(Arc::new(Mutex::new(Hart {
+                    region: Region(0, 0),
+                    x: [0; 32],
+                    f: [0.0; 32],
+                    csrs,
+                    pc: 0,
+                })));
+
+                hart_i += 1;
+            }
+
+            cores.push(Arc::new(Mutex::new(Core {
+                harts,
+                running: BTreeSet::new(),
             })));
 
-            i += 1;
+            core_i += 1;
         }
 
         Self {
-            harts,
-            running: AHashSet::new(),
+            cores,
         }
     }
 
     // replace this whole thing with a proper MMU
-    pub fn prepare_hart(&mut self, hart_id: usize, data: Vec<u8>) {
+    pub fn prepare_hart(&mut self, core_id: usize, hart_id: usize, data: Vec<u8>) {
         let bus = BUS.read();
 
         // step 1: get address
@@ -86,10 +90,12 @@ impl Cpu {
         }
 
         // step 2: load data
-        let mut hart = self.harts.get_mut(hart_id).unwrap().lock();
+        let mut core = self.cores.get_mut(core_id).unwrap().lock();
+        let mut hart = core.harts.get_mut(hart_id).unwrap().lock();
         hart.region = Region(address, data_len as usize);
 
         bus.dram.add_region(&hart.region);
+        drop(hart);
 
         bus.dram
             .memory
@@ -98,159 +104,20 @@ impl Cpu {
             .unwrap();
 
         // step 3: declare hart as running
-        self.running.insert(hart_id);
+        core.running.insert(hart_id);
     }
 }
-#[derive(Clone)]
-pub enum Register {
-    FloatingPoint(usize),
-    Integer(usize),
+
+pub struct Core {
+    pub harts: Vec<Arc<Mutex<Hart>>>,
+    pub running: BTreeSet<usize>,
 }
 
-#[derive(Clone)]
-pub struct OoOEData {
-    pub write_register: Option<Register>,
-    pub read_registers: Vec<Register>,
-    pub region: Option<Region>,
-    pub csr: Option<usize>,
-}
-
-//const MUTEX_EMPTY: Mutex<()> = Mutex::new(());
-
-#[derive(Clone)]
-pub struct OoOEHelper {
-    pub x: [bool; 32],
-    pub f: [bool; 32],
-    pub csrs: [bool; 4096],
-    pub regions: Vec<Region>,
-    pub queue: VecDeque<(Instruction, OoOEData)>,
-}
-
-impl OoOEHelper {
-    pub fn new() -> Self {
-        Self {
-            x: [false; 32],
-            f: [false; 32],
-            csrs: [false; 4096],
-            regions: Vec::new(),
-            queue: VecDeque::new(),
-        }
-    }
-
-    pub fn cycle(&mut self, inst: Instruction) -> (Instruction, OoOEData) {
-        let ((write_register, read_registers), region, csr) = match inst {
-            Instruction::Full(full) => {
-                let csr = if let FullInstruction::CSR(csr) = full {
-                    Some(csr.csr)
-                } else {
-                    None
-                };
-
-                let region = match full {
-                    FullInstruction::Load(Load { offset, mode, .. }) => {
-                        Some(Region(offset as u64, mode.size()))
-                    }
-                    FullInstruction::Store(Store { offset, mode, .. }) => {
-                        Some(Region(offset as u64, mode.size()))
-                    }
-                    FullInstruction::FPLoad(FPLoad {
-                        offset, precision, ..
-                    })
-                    | FullInstruction::FPStore(FPStore {
-                        offset, precision, ..
-                    }) => Some(Region(offset as u64, precision.size())),
-                    _ => None,
-                };
-
-                let registers = match full {
-                    FullInstruction::LUI(rd, _)
-                    | FullInstruction::AUIPC(rd, _)
-                    | FullInstruction::JAL(rd, _) => (Some(Register::Integer(rd)), vec![]),
-                    FullInstruction::JALR(rd, _, rs1)
-                    | FullInstruction::Load(Load { rd, rs1, .. })
-                    | FullInstruction::IMMOp(IMMOp { rd, rs1, .. })
-                    | FullInstruction::IMMShift(IMMShift { rd, rs1, .. })
-                    | FullInstruction::Fence(rd, rs1, _, _, _)
-                    | FullInstruction::FenceI(rd, rs1, _) => {
-                        (Some(Register::Integer(rd)), vec![Register::Integer(rs1)])
-                    }
-                    FullInstruction::Branch(Branch { rs1, rs2, .. })
-                    | FullInstruction::Store(Store { rs1, rs2, .. }) => {
-                        (None, vec![Register::Integer(rs1), Register::Integer(rs2)])
-                    }
-                    FullInstruction::IntOp(IntOp { rd, rs1, rs2, .. })
-                    | FullInstruction::IntShift(IntShift { rd, rs1, rs2, .. })
-                    | FullInstruction::MulOp(MulOp { rd, rs1, rs2, .. })
-                    | FullInstruction::Atomic(Atomic { rd, rs1, rs2, .. }) => (
-                        Some(Register::Integer(rd)),
-                        vec![Register::Integer(rs1), Register::Integer(rs2)],
-                    ),
-                    FullInstruction::CSR(CSR { rd, source, .. }) => {
-                        if let CSRSource::Register(r) = source {
-                            (Some(Register::Integer(rd)), vec![Register::Integer(r)])
-                        } else {
-                            (Some(Register::Integer(rd)), vec![])
-                        }
-                    }
-                    FullInstruction::FPLoad(FPLoad { rd, rs1, .. }) => (
-                        Some(Register::FloatingPoint(rd)),
-                        vec![Register::FloatingPoint(rs1)],
-                    ),
-                    FullInstruction::FPStore(FPStore { rs1, rs2, .. }) => (
-                        None,
-                        vec![Register::FloatingPoint(rs1), Register::FloatingPoint(rs2)],
-                    ),
-                    FullInstruction::FPFusedMultiplyOp(FPFusedMultiplyOp {
-                        rd,
-                        rs1,
-                        rs2,
-                        rs3,
-                        ..
-                    }) => (
-                        Some(Register::FloatingPoint(rd)),
-                        vec![
-                            Register::FloatingPoint(rs1),
-                            Register::FloatingPoint(rs2),
-                            Register::FloatingPoint(rs3),
-                        ],
-                    ),
-                    FullInstruction::FPSingleOp(FPSingleOp { rd, rs1, rs2, .. })
-                    | FullInstruction::FPDoubleOp(FPDoubleOp { rd, rs1, rs2, .. }) => (
-                        Some(Register::FloatingPoint(rd)),
-                        vec![Register::FloatingPoint(rs1), Register::FloatingPoint(rs2)],
-                    ),
-                    _ => (None, vec![]),
-                };
-
-                (registers, region, csr)
-            }
-            Instruction::Compressed(compressed) => unimplemented!(),
-        };
-
-        let mut registers = read_registers.clone();
-        if let Some(r) = write_register.clone() {
-            registers.push(r);
-        }
-
-        let oooe_data = OoOEData {
-            write_register,
-            read_registers,
-            region,
-            csr,
-        };
-
-        /*if !can_run {
-            self.queue.push_front((inst, oooe_data));
-            (inst, oooe_data)
-        } else */
-        {
-            for register in registers {
-                match register {
-                    Register::FloatingPoint(r) => self.f[r] = true,
-                    Register::Integer(r) => self.x[r] = true,
-                }
-            }
-            (inst, oooe_data)
+impl Core {
+    pub fn stop_hart(&mut self, hart: usize) {
+        if self.running.contains(&hart) {
+            self.harts[hart].lock().stop();
+            self.running.remove(&hart);
         }
     }
 }
@@ -261,13 +128,10 @@ pub struct Hart {
     pub f: [f64; 32],
     pub csrs: [u32; 4096],
     pub pc: u32,
-    pub skip: BTreeSet<u32>,
-    pub cache: BTreeMap<u32, bool>,
-    pub oooe: OoOEHelper,
 }
 
 impl Hart {
-    pub fn reset(&mut self) {
+    pub fn stop(&mut self) {
         BUS.read().dram.remove_region(&self.region);
         self.region = Region(0, 0);
         self.x = [0; 32];
@@ -276,7 +140,7 @@ impl Hart {
         self.pc = 0;
     }
 
-    pub fn fetch(&mut self) -> (u32, Instruction) {
+    pub fn fetch(&mut self) -> u32 {
         let index = self.region.0 + self.pc as u64;
         #[cfg(feature = "debug")]
         println!(
@@ -296,19 +160,22 @@ impl Hart {
             }
 
             self.pc += 4;
-            let inst = u32::from_le_bytes(buf);
-            (inst, Instruction::Full(FullInstruction::decode(inst)))
+            u32::from_le_bytes(buf)
         } else {
             if res != 2 {
                 panic!("reached end of program early");
             }
 
             self.pc += 2;
-            let inst = u16::from_le_bytes([buf[0], buf[1]]);
-            (
-                inst as u32,
-                Instruction::Compressed(CompressedInstruction::decode(inst)),
-            )
+            u16::from_le_bytes([buf[0], buf[1]]) as u32
+        }
+    }
+
+    pub fn decode(&self, inst: u32) -> Instruction {
+        if inst & 0b11 == 0b11 {
+            Instruction::Full(FullInstruction::decode(inst))
+        } else {
+            Instruction::Compressed(CompressedInstruction::decode(inst as u16))
         }
     }
 
@@ -415,10 +282,6 @@ impl Hart {
     ) {
         #[cfg(feature = "debug")]
         print!("{}", inst);
-
-        if self.skip.contains(&inst_u32) {
-            return;
-        }
 
         match inst {
             FullInstruction::LUI(rd, immediate) => {
@@ -540,7 +403,6 @@ impl Hart {
                 mode,
             }) => {
                 if rd == 0 {
-                    self.skip.insert(inst_u32);
                     return;
                 }
 
@@ -567,7 +429,6 @@ impl Hart {
                 ..
             }) => {
                 if rd == 0 {
-                    self.skip.insert(inst_u32);
                     return;
                 }
 
@@ -585,7 +446,6 @@ impl Hart {
             }
             FullInstruction::IntOp(IntOp { rd, rs1, rs2, mode }) => {
                 if rd == 0 {
-                    self.skip.insert(inst_u32);
                     return;
                 }
 
@@ -609,7 +469,6 @@ impl Hart {
             }
             FullInstruction::IntShift(IntShift { rd, rs1, rs2, mode }) => {
                 if rd == 0 {
-                    self.skip.insert(inst_u32);
                     return;
                 }
 
@@ -642,7 +501,6 @@ impl Hart {
             // RV32M
             FullInstruction::MulOp(MulOp { rd, rs1, rs2, mode }) => {
                 if rd == 0 {
-                    self.skip.insert(inst_u32);
                     return;
                 }
 
