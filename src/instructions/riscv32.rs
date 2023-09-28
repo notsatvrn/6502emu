@@ -35,12 +35,12 @@ impl Display for BranchMode {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BranchMode::Equal => write!(f, "beq"),
-            BranchMode::NotEqual => write!(f, "bne"),
-            BranchMode::LessThan => write!(f, "blt"),
-            BranchMode::GreaterOrEqual => write!(f, "bge"),
-            BranchMode::LessThanUnsigned => write!(f, "bltu"),
-            BranchMode::GreaterOrEqualUnsigned => write!(f, "bgeu"),
+            Self::Equal => write!(f, "beq"),
+            Self::NotEqual => write!(f, "bne"),
+            Self::LessThan => write!(f, "blt"),
+            Self::GreaterOrEqual => write!(f, "bge"),
+            Self::LessThanUnsigned => write!(f, "bltu"),
+            Self::GreaterOrEqualUnsigned => write!(f, "bgeu"),
         }
     }
 }
@@ -72,26 +72,33 @@ pub enum LoadMode {
     Word,
     UnsignedByte,
     UnsignedHalfWord,
+    Single,
+    Double,
 }
 
 impl LoadMode {
+    #[inline]
     pub fn size(&self) -> usize {
         match self {
             Self::Byte | Self::UnsignedByte => 1,
             Self::HalfWord | Self::UnsignedHalfWord => 2,
-            Self::Word => 4,
+            Self::Word | Self::Single => 4,
+            Self::Double => 8,
         }
     }
 }
 
 impl Display for LoadMode {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LoadMode::Byte => write!(f, "lb"),
-            LoadMode::HalfWord => write!(f, "lh"),
-            LoadMode::Word => write!(f, "lw"),
-            LoadMode::UnsignedByte => write!(f, "lbu"),
-            LoadMode::UnsignedHalfWord => write!(f, "lhu"),
+            Self::Byte => write!(f, "lb"),
+            Self::HalfWord => write!(f, "lh"),
+            Self::Word => write!(f, "lw"),
+            Self::UnsignedByte => write!(f, "lbu"),
+            Self::UnsignedHalfWord => write!(f, "lhu"),
+            Self::Single => write!(f, "flw"),
+            Self::Double => write!(f, "fld"),
         }
     }
 }
@@ -121,24 +128,31 @@ pub enum StoreMode {
     Byte,
     HalfWord,
     Word,
+    Single,
+    Double,
 }
 
 impl StoreMode {
+    #[inline]
     pub fn size(&self) -> usize {
         match self {
             Self::Byte => 1,
             Self::HalfWord => 2,
-            Self::Word => 4,
+            Self::Word | Self::Single => 4,
+            Self::Double => 8,
         }
     }
 }
 
 impl Display for StoreMode {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            StoreMode::Byte => write!(f, "sb"),
-            StoreMode::HalfWord => write!(f, "sh"),
-            StoreMode::Word => write!(f, "sw"),
+            Self::Byte => write!(f, "sb"),
+            Self::HalfWord => write!(f, "sh"),
+            Self::Word => write!(f, "sw"),
+            Self::Single => write!(f, "fsw"),
+            Self::Double => write!(f, "fsd"),
         }
     }
 }
@@ -174,14 +188,15 @@ pub enum IMMOpMode {
 }
 
 impl Display for IMMOpMode {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            IMMOpMode::Add => write!(f, "addi"),
-            IMMOpMode::SetLessThan => write!(f, "slti"),
-            IMMOpMode::SetLessThanUnsigned => write!(f, "sltiu"),
-            IMMOpMode::ExclusiveOr => write!(f, "xori"),
-            IMMOpMode::Or => write!(f, "ori"),
-            IMMOpMode::And => write!(f, "andi"),
+            Self::Add => write!(f, "addi"),
+            Self::SetLessThan => write!(f, "slti"),
+            Self::SetLessThanUnsigned => write!(f, "sltiu"),
+            Self::ExclusiveOr => write!(f, "xori"),
+            Self::Or => write!(f, "ori"),
+            Self::And => write!(f, "andi"),
         }
     }
 }
@@ -195,11 +210,12 @@ pub enum ShiftMode {
 }
 
 impl Display for ShiftMode {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ShiftMode::LogicalLeft => write!(f, "slli"),
-            ShiftMode::LogicalRight => write!(f, "srli"),
-            ShiftMode::ArithmeticRight => write!(f, "srai"),
+            Self::LogicalLeft => write!(f, "slli"),
+            Self::LogicalRight => write!(f, "srli"),
+            Self::ArithmeticRight => write!(f, "srai"),
         }
     }
 }
@@ -263,13 +279,13 @@ pub enum IntOpMode {
 impl Display for IntOpMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            IntOpMode::Add => write!(f, "add"),
-            IntOpMode::Subtract => write!(f, "sub"),
-            IntOpMode::SetLessThan => write!(f, "slt"),
-            IntOpMode::SetLessThanUnsigned => write!(f, "sltu"),
-            IntOpMode::ExclusiveOr => write!(f, "xor"),
-            IntOpMode::Or => write!(f, "or"),
-            IntOpMode::And => write!(f, "and"),
+            Self::Add => write!(f, "add"),
+            Self::Subtract => write!(f, "sub"),
+            Self::SetLessThan => write!(f, "slt"),
+            Self::SetLessThanUnsigned => write!(f, "sltu"),
+            Self::ExclusiveOr => write!(f, "xor"),
+            Self::Or => write!(f, "or"),
+            Self::And => write!(f, "and"),
         }
     }
 }
@@ -326,8 +342,8 @@ impl Display for CSRSource {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CSRSource::Register(register) => write!(f, "x{}", register),
-            CSRSource::Immediate(immediate) => write!(f, "{}", immediate),
+            Self::Register(register) => write!(f, "x{}", register),
+            Self::Immediate(immediate) => write!(f, "{}", immediate),
         }
     }
 }
@@ -343,9 +359,9 @@ impl Display for CSRMode {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CSRMode::ReadWrite => write!(f, "csrrw"),
-            CSRMode::ReadSetBits => write!(f, "csrrs"),
-            CSRMode::ReadClearBits => write!(f, "csrrc"),
+            Self::ReadWrite => write!(f, "csrrw"),
+            Self::ReadSetBits => write!(f, "csrrs"),
+            Self::ReadClearBits => write!(f, "csrrc"),
         }
     }
 }
@@ -386,14 +402,14 @@ impl Display for MulOpMode {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            MulOpMode::Multiply => write!(f, "mul"),
-            MulOpMode::MultiplyHull => write!(f, "mulh"),
-            MulOpMode::MultiplyHullSignedUnsigned => write!(f, "mulhsu"),
-            MulOpMode::MultiplyHullUnsigned => write!(f, "mulhu"),
-            MulOpMode::Divide => write!(f, "div"),
-            MulOpMode::DivideUnsigned => write!(f, "divu"),
-            MulOpMode::Remainder => write!(f, "rem"),
-            MulOpMode::RemainderUnsigned => write!(f, "remu"),
+            Self::Multiply => write!(f, "mul"),
+            Self::MultiplyHull => write!(f, "mulh"),
+            Self::MultiplyHullSignedUnsigned => write!(f, "mulhsu"),
+            Self::MultiplyHullUnsigned => write!(f, "mulhu"),
+            Self::Divide => write!(f, "div"),
+            Self::DivideUnsigned => write!(f, "divu"),
+            Self::Remainder => write!(f, "rem"),
+            Self::RemainderUnsigned => write!(f, "remu"),
         }
     }
 }
@@ -452,17 +468,17 @@ impl Display for AtomicMode {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AtomicMode::LoadReservedWord => write!(f, "lr.w"),
-            AtomicMode::StoreConditionalWord => write!(f, "sc.w"),
-            AtomicMode::SwapWord => write!(f, "amoswap.w"),
-            AtomicMode::AddWord => write!(f, "amoadd.w"),
-            AtomicMode::ExclusiveOrWord => write!(f, "amoxor.w"),
-            AtomicMode::AndWord => write!(f, "amoand.w"),
-            AtomicMode::OrWord => write!(f, "amoor.w"),
-            AtomicMode::MinimumWord => write!(f, "amomin.w"),
-            AtomicMode::MaximumWord => write!(f, "amomax.w"),
-            AtomicMode::MinimumUnsignedWord => write!(f, "amominu.w"),
-            AtomicMode::MaximumUnsignedWord => write!(f, "amomaxu.w"),
+            Self::LoadReservedWord => write!(f, "lr.w"),
+            Self::StoreConditionalWord => write!(f, "sc.w"),
+            Self::SwapWord => write!(f, "amoswap.w"),
+            Self::AddWord => write!(f, "amoadd.w"),
+            Self::ExclusiveOrWord => write!(f, "amoxor.w"),
+            Self::AndWord => write!(f, "amoand.w"),
+            Self::OrWord => write!(f, "amoor.w"),
+            Self::MinimumWord => write!(f, "amomin.w"),
+            Self::MaximumWord => write!(f, "amomax.w"),
+            Self::MinimumUnsignedWord => write!(f, "amominu.w"),
+            Self::MaximumUnsignedWord => write!(f, "amomaxu.w"),
         }
     }
 }
@@ -487,61 +503,9 @@ impl Display for FPPrecision {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            FPPrecision::Single => write!(f, "s"),
-            FPPrecision::Double => write!(f, "d"),
+            Self::Single => write!(f, "s"),
+            Self::Double => write!(f, "d"),
         }
-    }
-}
-
-// RV32F/D - load
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
-pub struct FPLoad {
-    pub rd: usize,
-    pub rs1: usize,
-    pub offset: i32,
-    pub precision: FPPrecision,
-}
-
-impl Display for FPLoad {
-    #[inline]
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "fl{} x{}, {}(x{})",
-            match self.precision {
-                FPPrecision::Single => "w",
-                FPPrecision::Double => "d",
-            },
-            self.rd,
-            self.offset,
-            self.rs1
-        )
-    }
-}
-
-// RV32F/D - store
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
-pub struct FPStore {
-    pub rs1: usize,
-    pub rs2: usize,
-    pub offset: i32,
-    pub precision: FPPrecision,
-}
-
-impl Display for FPStore {
-    #[inline]
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "fs{} x{}, {}(x{})",
-            match self.precision {
-                FPPrecision::Single => "w",
-                FPPrecision::Double => "d",
-            },
-            self.rs1,
-            self.offset,
-            self.rs2
-        )
     }
 }
 
@@ -558,14 +522,14 @@ pub enum FPRoundingMode {
 
 impl FPRoundingMode {
     #[inline]
-    pub fn decode(rm: u32) -> FPRoundingMode {
+    pub fn decode(rm: u32) -> Self {
         match rm {
-            0b000 => FPRoundingMode::NearestTiesEven,
-            0b001 => FPRoundingMode::Zero,
-            0b010 => FPRoundingMode::Down,
-            0b011 => FPRoundingMode::Up,
-            0b100 => FPRoundingMode::NearestMaxMagnitude,
-            0b111 => FPRoundingMode::Dynamic,
+            0b000 => Self::NearestTiesEven,
+            0b001 => Self::Zero,
+            0b010 => Self::Down,
+            0b011 => Self::Up,
+            0b100 => Self::NearestMaxMagnitude,
+            0b111 => Self::Dynamic,
             _ => panic!("illegal rounding mode"),
         }
     }
@@ -573,14 +537,12 @@ impl FPRoundingMode {
     #[inline]
     pub fn apply_f64(&self, csr_rm: u32, frm: bool, value: f64) -> f64 {
         match self {
-            FPRoundingMode::NearestTiesEven => value.round_ties_even(),
-            FPRoundingMode::Zero => value.trunc(),
-            FPRoundingMode::Down => value.floor(),
-            FPRoundingMode::Up => value.ceil(),
-            FPRoundingMode::NearestMaxMagnitude => value.round(),
-            FPRoundingMode::Dynamic if !frm => {
-                FPRoundingMode::decode(csr_rm).apply_f64(0, true, value)
-            }
+            Self::NearestTiesEven => value.round_ties_even(),
+            Self::Zero => value.trunc(),
+            Self::Down => value.floor(),
+            Self::Up => value.ceil(),
+            Self::NearestMaxMagnitude => value.round(),
+            Self::Dynamic if !frm => Self::decode(csr_rm).apply_f64(0, true, value),
             _ => panic!("illegal rounding mode"),
         }
     }
@@ -588,14 +550,12 @@ impl FPRoundingMode {
     #[inline]
     pub fn apply_f32(&self, csr_rm: u32, frm: bool, value: f32) -> f32 {
         match self {
-            FPRoundingMode::NearestTiesEven => value.round_ties_even(),
-            FPRoundingMode::Zero => value.trunc(),
-            FPRoundingMode::Down => value.floor(),
-            FPRoundingMode::Up => value.ceil(),
-            FPRoundingMode::NearestMaxMagnitude => value.round(),
-            FPRoundingMode::Dynamic if !frm => {
-                FPRoundingMode::decode(csr_rm).apply_f32(0, true, value)
-            }
+            Self::NearestTiesEven => value.round_ties_even(),
+            Self::Zero => value.trunc(),
+            Self::Down => value.floor(),
+            Self::Up => value.ceil(),
+            Self::NearestMaxMagnitude => value.round(),
+            Self::Dynamic if !frm => Self::decode(csr_rm).apply_f32(0, true, value),
             _ => panic!("illegal rounding mode"),
         }
     }
@@ -697,6 +657,7 @@ pub enum FPSingleOpMode {
 }
 
 impl FPSingleOpMode {
+    #[inline]
     pub fn return_mode(&self) -> FPReturnMode {
         match self {
             Self::Equals
@@ -710,6 +671,7 @@ impl FPSingleOpMode {
         }
     }
 
+    #[inline]
     pub fn uses_rs2(&self) -> bool {
         !matches!(
             self,
@@ -803,6 +765,7 @@ pub enum FPDoubleOpMode {
 }
 
 impl FPDoubleOpMode {
+    #[inline]
     fn return_mode(&self) -> FPReturnMode {
         match self {
             Self::Equals
@@ -816,6 +779,7 @@ impl FPDoubleOpMode {
         }
     }
 
+    #[inline]
     pub fn uses_rs2(&self) -> bool {
         !matches!(
             self,
@@ -888,8 +852,6 @@ pub enum FullInstruction {
     MulOp(MulOp),   // rd, rs1, rs2
     Atomic(Atomic), // rd, rs1, rs2, aq, rl
 
-    FPLoad(FPLoad),
-    FPStore(FPStore),
     FPFusedMultiplyOp(FPFusedMultiplyOp),
     FPSingleOp(FPSingleOp),
     FPDoubleOp(FPDoubleOp),
@@ -919,8 +881,8 @@ impl FullInstruction {
 
         match opcode {
             // RV32I
-            0b0110111 => FullInstruction::LUI(rd, inst >> 12),
-            0b0010111 => FullInstruction::AUIPC(rd, inst >> 12),
+            0b0110111 => FullInstruction::LUI(rd, (inst >> 12) << 12),
+            0b0010111 => FullInstruction::AUIPC(rd, (inst >> 12) << 12),
             0b1101111 => {
                 let umm = ((inst >> 31) << 19)
                     | (((inst >> 12) & 0b11111111) << 11)
@@ -1170,33 +1132,33 @@ impl FullInstruction {
             0b0000111 if (funct3 >> 1) == 1 => {
                 let offset = sign_extend_u32(inst >> 20, 12);
 
-                let precision = if funct3 == 0b010 {
-                    FPPrecision::Single
+                let mode = if funct3 == 0b010 {
+                    LoadMode::Single
                 } else {
-                    FPPrecision::Double
+                    LoadMode::Double
                 };
 
-                FullInstruction::FPLoad(FPLoad {
+                FullInstruction::Load(Load {
                     rd,
                     rs1,
                     offset,
-                    precision,
+                    mode,
                 })
             }
             0b0100111 if (funct3 >> 1) == 1 => {
                 let offset = sign_extend_u32(((inst >> 7) & 0b11111) | ((inst >> 25) << 5), 12);
 
-                let precision = if funct3 == 0b010 {
-                    FPPrecision::Single
+                let mode = if funct3 == 0b010 {
+                    StoreMode::Single
                 } else {
-                    FPPrecision::Double
+                    StoreMode::Double
                 };
 
-                FullInstruction::FPStore(FPStore {
+                FullInstruction::Store(Store {
                     rs1,
                     rs2,
                     offset,
-                    precision,
+                    mode,
                 })
             }
             0b1000011 | 0b1000111 | 0b1001011 | 0b1001111 if funct2 & 0b10 == 0 => {
@@ -1342,8 +1304,10 @@ impl FullInstruction {
 impl Display for FullInstruction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            FullInstruction::LUI(rd, immediate) => write!(f, "lui x{}, {}", rd, immediate),
-            FullInstruction::AUIPC(rd, immediate) => write!(f, "auipc x{}, {}", rd, immediate),
+            FullInstruction::LUI(rd, immediate) => write!(f, "lui x{}, {}", rd, immediate >> 12),
+            FullInstruction::AUIPC(rd, immediate) => {
+                write!(f, "auipc x{}, {}", rd, immediate >> 12)
+            }
             FullInstruction::JAL(rd, offset) => write!(f, "jal x{}, {}", rd, offset),
             FullInstruction::JALR(rd, offset, rs1) => {
                 write!(f, "jalr x{}, {}(x{})", rd, offset, rs1)
@@ -1367,8 +1331,6 @@ impl Display for FullInstruction {
             FullInstruction::CSR(csr) => write!(f, "{}", csr),
             FullInstruction::MulOp(op) => write!(f, "{}", op),
             FullInstruction::Atomic(atomic) => write!(f, "{}", atomic),
-            FullInstruction::FPLoad(load) => write!(f, "{}", load),
-            FullInstruction::FPStore(store) => write!(f, "{}", store),
             FullInstruction::FPFusedMultiplyOp(op) => write!(f, "{}", op),
             FullInstruction::FPSingleOp(op) => write!(f, "{}", op),
             FullInstruction::FPDoubleOp(op) => write!(f, "{}", op),
@@ -1390,8 +1352,6 @@ pub enum CompressedInstruction {
     // if bool is true, this was an SP instruction
     Load(Load, bool),
     Store(Store, bool),
-    FPLoad(FPLoad, bool),
-    FPStore(FPStore, bool),
 
     ADDI,
     JAL,
@@ -1440,12 +1400,12 @@ impl CompressedInstruction {
                 0b001 => {
                     let imm = (((inst >> 5) & 0b11) << 3) | ((inst >> 10) & 0b111);
                     let offset = imm as i32 * 8;
-                    CompressedInstruction::FPLoad(
-                        FPLoad {
+                    CompressedInstruction::Load(
+                        Load {
                             rd: r1 & 0b111,
                             rs1: r2 & 0b111,
                             offset,
-                            precision: FPPrecision::Double,
+                            mode: LoadMode::Double,
                         },
                         false,
                     )
@@ -1470,12 +1430,12 @@ impl CompressedInstruction {
                         | (((inst >> 10) & 0b111) << 1)
                         | ((inst >> 6) & 1);
                     let offset = imm as i32 * 4;
-                    CompressedInstruction::FPLoad(
-                        FPLoad {
+                    CompressedInstruction::Load(
+                        Load {
                             rd: r1 & 0b111,
                             rs1: r2 & 0b111,
                             offset,
-                            precision: FPPrecision::Single,
+                            mode: LoadMode::Single,
                         },
                         false,
                     )
@@ -1483,12 +1443,12 @@ impl CompressedInstruction {
                 0b101 => {
                     let imm = (((inst >> 5) & 0b11) << 3) | ((inst >> 10) & 0b111);
                     let offset = imm as i32 * 8;
-                    CompressedInstruction::FPStore(
-                        FPStore {
+                    CompressedInstruction::Store(
+                        Store {
                             rs1: r2 & 0b111,
                             rs2: r1 & 0b111,
                             offset,
-                            precision: FPPrecision::Double,
+                            mode: StoreMode::Double,
                         },
                         false,
                     )
@@ -1513,12 +1473,12 @@ impl CompressedInstruction {
                         | (((inst >> 10) & 0b111) << 1)
                         | ((inst >> 6) & 1);
                     let offset = imm as i32 * 4;
-                    CompressedInstruction::FPStore(
-                        FPStore {
+                    CompressedInstruction::Store(
+                        Store {
                             rs1: r2 & 0b111,
                             rs2: r1 & 0b111,
                             offset,
-                            precision: FPPrecision::Single,
+                            mode: StoreMode::Single,
                         },
                         false,
                     )
@@ -1624,12 +1584,12 @@ impl CompressedInstruction {
                 0b001 => {
                     let imm = (((inst >> 7) & 0b111) << 3) | ((inst >> 10) & 0b111);
                     let offset = imm as i32 * 8;
-                    CompressedInstruction::FPLoad(
-                        FPLoad {
+                    CompressedInstruction::Load(
+                        Load {
                             rd: r1 & 0b111,
                             rs1: r2 & 0b111,
                             offset,
-                            precision: FPPrecision::Double,
+                            mode: LoadMode::Double,
                         },
                         true,
                     )
@@ -1650,12 +1610,12 @@ impl CompressedInstruction {
                 0b011 => {
                     let imm = (((inst >> 7) & 0b11) << 4) | ((inst >> 9) & 0b1111);
                     let offset = imm as i32 * 4;
-                    CompressedInstruction::FPLoad(
-                        FPLoad {
+                    CompressedInstruction::Load(
+                        Load {
                             rd: r1 & 0b111,
                             rs1: r2 & 0b111,
                             offset,
-                            precision: FPPrecision::Single,
+                            mode: LoadMode::Single,
                         },
                         true,
                     )
@@ -1687,12 +1647,12 @@ impl CompressedInstruction {
                     let imm = (((inst >> 7) & 0b111) << 3) | ((inst >> 10) & 0b111);
                     let offset = imm as i32 * 8;
                     // TODO: im stupid
-                    CompressedInstruction::FPStore(
-                        FPStore {
+                    CompressedInstruction::Store(
+                        Store {
                             rs1: r2 & 0b111,
                             rs2: r1 & 0b111,
                             offset,
-                            precision: FPPrecision::Double,
+                            mode: StoreMode::Double,
                         },
                         true,
                     )
@@ -1713,12 +1673,12 @@ impl CompressedInstruction {
                 0b111 => {
                     let imm = (((inst >> 7) & 0b11) << 4) | ((inst >> 9) & 0b1111);
                     let offset = imm as i32 * 4;
-                    CompressedInstruction::FPStore(
-                        FPStore {
+                    CompressedInstruction::Store(
+                        Store {
                             rs1: r2 & 0b111,
                             rs2: r1 & 0b111,
                             offset,
-                            precision: FPPrecision::Single,
+                            mode: StoreMode::Single,
                         },
                         true,
                     )
@@ -1731,7 +1691,7 @@ impl CompressedInstruction {
 }
 
 impl Display for CompressedInstruction {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, _f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         unimplemented!()
     }
 }

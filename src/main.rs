@@ -5,7 +5,7 @@ pub mod cpu;
 pub mod instructions;
 pub mod io;
 
-use cpu::riscv32_2::*;
+use cpu::riscv32::*;
 use std::env;
 use std::time::Instant;
 
@@ -23,42 +23,24 @@ pub fn convert(compiled: Vec<u32>) -> Vec<u8> {
 //#[tokio::main]
 fn main() {
     let args: Vec<String> = env::args().collect();
-    let cores = num_cpus::get();
-    let mut cpu = Cpu::init(cores, 1, 1024 * 1024);
+
+    let threads = num_cpus::get();
+    let cores = num_cpus::get_physical();
+    init(cores, threads / cores, 1024 * 1024 * 1024);
     #[cfg(feature = "debug")]
     println!("CPU Initialized.");
 
-    let instructions: Vec<u32> = vec![
+    let program: Vec<u32> = vec![
         0xff050513, 0x00a00023, 0x00a01223, 0x00a02623, 0x00000583, 0x00401603, 0x00c02683,
-        0x00004703, 0x00405783, 0xff050513, 0x00a00023, 0x00a01223, 0x00a02623, 0x00000583,
-        0x00401603, 0x00c02683, 0x00004703, 0x00405783, 0xff050513, 0x00a00023, 0x00a01223,
-        0x00a02623, 0x00000583, 0x00401603, 0x00c02683, 0x00004703, 0x00405783, 0xff050513,
-        0x00a00023, 0x00a01223, 0x00a02623, 0x00000583, 0x00401603, 0x00c02683, 0x00004703,
-        0x00405783, 0xff050513, 0x00a00023, 0x00a01223, 0x00a02623, 0x00000583, 0x00401603,
-        0x00c02683, 0x00004703, 0x00405783, 0xff050513, 0x00a00023, 0x00a01223, 0x00a02623,
-        0x00000583, 0x00401603, 0x00c02683, 0x00004703, 0x00405783, 0xff050513, 0x00a00023,
-        0x00a01223, 0x00a02623, 0x00000583, 0x00401603, 0x00c02683, 0x00004703, 0x00405783,
-        0xff050513, 0x00a00023, 0x00a01223, 0x00a02623, 0x00000583, 0x00401603, 0x00c02683,
-        0x00004703, 0x00405783, 0xff050513, 0x00a00023, 0x00a01223, 0x00a02623, 0x00000583,
-        0x00401603, 0x00c02683, 0x00004703, 0x00405783, 0xff050513, 0x00a00023, 0x00a01223,
-        0x00a02623, 0x00000583, 0x00401603, 0x00c02683, 0x00004703, 0x00405783, 0xff050513,
-        0x00a00023, 0x00a01223, 0x00a02623, 0x00000583, 0x00401603, 0x00c02683, 0x00004703,
-        0x00405783, 0xff050513, 0x00a00023, 0x00a01223, 0x00a02623, 0x00000583, 0x00401603,
-        0x00c02683, 0x00004703, 0x00405783, 0xff050513, 0x00a00023, 0x00a01223, 0x00a02623,
-        0x00000583, 0x00401603, 0x00c02683, 0x00004703, 0x00405783, 0xff050513, 0x00a00023,
-        0x00a01223, 0x00a02623, 0x00000583, 0x00401603, 0x00c02683, 0x00004703, 0x00405783,
-        0xff050513, 0x00a00023, 0x00a01223, 0x00a02623, 0x00000583, 0x00401603, 0x00c02683,
-        0x00004703, 0x00405783, 0xff050513, 0x00a00023, 0x00a01223, 0x00a02623, 0x00000583,
-        0x00401603, 0x00c02683, 0x00004703, 0x00405783, 0xff050513, 0x00a00023, 0x00a01223,
-        0x00a02623, 0x00000583, 0x00401603, 0x00c02683, 0x00004703, 0x00405783, 0xff050513,
-        0x00a00023, 0x00a01223, 0x00a02623, 0x00000583, 0x00401603, 0x00c02683, 0x00004703,
-        0x00405783,
+        0x00004703, 0x00405783,
     ];
-    #[cfg(feature = "debug")]
+
+    let instructions: Vec<u32> = program.repeat(1000000);
+
     println!("instruction count: {}", instructions.len());
 
     if args.contains(&"--simulator".to_owned()) {
-        let mut binary = convert(instructions);
+        let mut binary = convert(instructions.clone());
 
         for arg in args {
             if arg.starts_with("--input") {
@@ -68,7 +50,9 @@ fn main() {
             }
         }
 
-        cpu.prepare_hart(0, 0, binary.clone());
+        prepare_hart(0, 0, binary.clone());
+
+        let cpu = CPU.read();
 
         let mut core = cpu.cores[0].lock();
         let mut hart = core.harts[0].lock();
@@ -76,9 +60,20 @@ fn main() {
         let now = Instant::now();
 
         while (hart.pc as usize) < hart.region.1 {
-            let inst_u32 = hart.fetch();
-            let inst = hart.decode(inst_u32);
-            hart.execute(inst_u32, inst);
+            hart.fetch();
+
+            let mut i: usize = 1;
+            while i < hart.pipeline.len() {
+                match hart.pipeline[i].stage {
+                    Stage::Fetch => unreachable!(),
+                    Stage::Decode => hart.decode(),
+                    Stage::Execute => hart.execute(),
+                    Stage::Memory => hart.memory(),
+                    Stage::Write => hart.write(),
+                };
+
+                i += 1;
+            }
         }
 
         drop(hart);
@@ -119,9 +114,15 @@ fn main() {
         }
         */
 
-        println!("{:?}", now.elapsed());
+        let elapsed = now.elapsed();
+
+        println!(
+            "elapsed: {:?}, MIPS: {}",
+            elapsed,
+            (instructions.len() as f64) / elapsed.as_secs_f64()
+        );
 
         #[cfg(feature = "debug")]
-        println!("{}", cpu.harts[0].lock().get(10)); // print x10 on hart 0
+        println!("{}", core.harts[0].lock().get(10)); // print x10 on hart 0
     }
 }

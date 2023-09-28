@@ -7,8 +7,7 @@ use vm_memory::{
 
 pub static BUS: LazyLock<RwLock<Bus>> = LazyLock::new(|| RwLock::new(Bus::new(0)));
 
-#[derive(Debug, Clone, Copy, bytemuck::NoUninit, PartialEq, Eq)]
-#[repr(C)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Region(pub u64, pub usize);
 
 #[derive(Clone)]

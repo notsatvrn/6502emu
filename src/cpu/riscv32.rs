@@ -1,36 +1,48 @@
 use crate::instructions::riscv32::*;
-use crate::io::{Region, BUS};
-use ahash::{AHashMap, AHashSet};
-use parking_lot::Mutex;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::sync::Arc;
+use crate::io::*;
+
+use parking_lot::{Mutex, RwLock};
+use std::sync::LazyLock;
+use std::{collections::BTreeSet, sync::Arc};
+use tinyvec::ArrayVec;
 use vm_memory::{Bytes, GuestAddress, GuestAddressSpace, GuestMemory, GuestMemoryRegion};
 
-pub type ThreadSafeHart = Arc<Mutex<Hart>>;
+#[cfg(feature = "debug")]
+use std::mem::transmute;
 
+pub static CPU: LazyLock<RwLock<Cpu>> = LazyLock::new(|| RwLock::new(Cpu::default()));
+
+#[derive(Default, Debug)]
 pub struct Cpu {
-    pub harts: Vec<ThreadSafeHart>,
-    pub running: AHashSet<usize>,
+    pub cores: Vec<Arc<Mutex<Core>>>,
 }
 
-impl Cpu {
-    pub fn init(hart_count: usize, memory_size: u32) -> Self {
-        BUS.write().dram.size = memory_size as u64;
+pub fn init(core_count: usize, hart_count: usize, memory_size: u32) {
+    let mut cpu = CPU.write();
 
-        let mut csrs = [0u32; 4096];
+    if !cpu.cores.is_empty() {
+        panic!("init called after already initialized");
+    }
 
-        // machine info registers
-        // mvendorid (0xF11) is already 0, keep because this is a non-commercial implementation
-        csrs[0xF12] = 35; // marchid
+    BUS.write().dram.size = memory_size as u64;
 
-        // machine trap setup
-        csrs[0x301] = 0b01000000000000000001000100101100; // misa
+    let mut csrs = [0u32; 4096];
 
-        let mut i: usize = 0;
-        let mut harts = Vec::new();
-        while i < hart_count {
+    // machine info registers
+    // mvendorid (0xF11) is already 0, keep because this is a non-commercial implementation
+    csrs[0xF12] = 35; // marchid
+
+    // machine trap setup
+    csrs[0x301] = 0b01000000000000000001000100101100; // misa
+
+    let mut core_i: usize = 0;
+    let mut hart_i: usize = 0;
+    while core_i < core_count {
+        let mut harts = HartVec::new();
+
+        while hart_i < hart_count * (core_i + 1) {
             // hart-specific csrs
-            csrs[0xF14] = i as u32; // mhartid
+            csrs[0xF14] = hart_i as u32; // mhartid
 
             harts.push(Arc::new(Mutex::new(Hart {
                 region: Region(0, 0),
@@ -38,236 +50,167 @@ impl Cpu {
                 f: [0.0; 32],
                 csrs,
                 pc: 0,
-                skip: BTreeSet::new(),
-                cache: BTreeMap::new(),
-                oooe: OoOEHelper::new(),
+                pipeline: ArrayVec::new(),
             })));
 
-            i += 1;
+            hart_i += 1;
         }
 
-        Self {
+        cpu.cores.push(Arc::new(Mutex::new(Core {
             harts,
-            running: AHashSet::new(),
-        }
-    }
+            running: BTreeSet::new(),
+        })));
 
-    // replace this whole thing with a proper MMU
-    pub fn prepare_hart(&mut self, hart_id: usize, data: Vec<u8>) {
-        let bus = BUS.read();
-
-        // step 1: get address
-        let mut address = 0;
-        let memory = bus.dram.memory.memory();
-        let data_len = data.len() as u64;
-        let mut last_end = 0;
-
-        for (i, region) in memory.iter().enumerate() {
-            let start = region.start_addr().0;
-
-            if i == 0 && data_len < start {
-                break;
-            }
-
-            if (start - last_end) >= data_len {
-                address = last_end;
-                break;
-            }
-
-            last_end = start + region.len();
-
-            if (i + 1) == memory.num_regions() {
-                if (last_end + data_len) < bus.dram.size {
-                    address = last_end;
-                } else {
-                    panic!("out of bounds memory access");
-                }
-            }
-        }
-
-        // step 2: load data
-        let mut hart = self.harts.get_mut(hart_id).unwrap().lock();
-        hart.region = Region(address, data_len as usize);
-
-        bus.dram.add_region(&hart.region);
-
-        bus.dram
-            .memory
-            .memory()
-            .write(data.as_slice(), GuestAddress(address))
-            .unwrap();
-
-        // step 3: declare hart as running
-        self.running.insert(hart_id);
+        core_i += 1;
     }
 }
-#[derive(Clone)]
+
+// replace this whole thing with a proper MMU
+pub fn prepare_hart(core_id: usize, hart_id: usize, data: Vec<u8>) {
+    let bus = BUS.read();
+
+    // step 1: get address
+    let mut address = 0;
+    let memory = bus.dram.memory.memory();
+    let data_len = data.len() as u64;
+    let mut last_end = 0;
+
+    for (i, region) in memory.iter().enumerate() {
+        let start = region.start_addr().0;
+
+        if i == 0 && data_len < start {
+            break;
+        }
+
+        if (start - last_end) >= data_len {
+            address = last_end;
+            break;
+        }
+
+        last_end = start + region.len();
+
+        if (i + 1) == memory.num_regions() {
+            if (last_end + data_len) < bus.dram.size {
+                address = last_end;
+            } else {
+                panic!("out of bounds memory access");
+            }
+        }
+    }
+
+    // step 2: load data
+    let mut cpu = CPU.write();
+    let mut core = cpu.cores.get_mut(core_id).unwrap().lock();
+    let mut hart = core.harts.get_mut(hart_id).unwrap().lock();
+    hart.region = Region(address, data_len as usize);
+
+    bus.dram.add_region(&hart.region);
+    drop(hart);
+
+    bus.dram
+        .memory
+        .memory()
+        .write(data.as_slice(), GuestAddress(address))
+        .unwrap();
+
+    // step 3: declare hart as running
+    core.running.insert(hart_id);
+}
+
+type HartVec = ArrayVec<[Arc<Mutex<Hart>>; 4]>;
+
+#[derive(Debug)]
+pub struct Core {
+    pub harts: HartVec,
+    pub running: BTreeSet<usize>,
+}
+
+impl Core {
+    pub fn stop_hart(&mut self, hart: usize) {
+        if self.running.contains(&hart) {
+            self.harts[hart].lock().stop();
+            self.running.remove(&hart);
+        }
+    }
+}
+
+/*
+#[derive(Debug, PartialEq, Eq)]
 pub enum Register {
     FloatingPoint(usize),
     Integer(usize),
 }
+*/
 
-#[derive(Clone)]
-pub struct OoOEData {
-    pub write_register: Option<Register>,
-    pub read_registers: Vec<Register>,
-    pub region: Option<Region>,
-    pub csr: Option<usize>,
+#[derive(Debug, PartialEq, Eq)]
+pub enum Stage {
+    Fetch,
+    Decode,
+    Execute,
+    Memory,
+    Write,
 }
 
-//const MUTEX_EMPTY: Mutex<()> = Mutex::new(());
-
-#[derive(Clone)]
-pub struct OoOEHelper {
-    pub x: [bool; 32],
-    pub f: [bool; 32],
-    pub csrs: [bool; 4096],
-    pub regions: Vec<Region>,
-    pub queue: VecDeque<(Instruction, OoOEData)>,
+#[derive(Debug, PartialEq)]
+pub enum ReturnMode {
+    Integer(usize, u32),
+    Single(usize, f32),
+    Double(usize, f64),
 }
 
-impl OoOEHelper {
-    pub fn new() -> Self {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MemoryOperation {
+    Load(u32, LoadMode),
+    Store(u32, ArrayVec<[u8; 8]>),
+}
+
+#[derive(Debug)]
+pub struct InstructionData {
+    pub insti: u32,
+    pub inst: Instruction,
+    pub stage: Stage,
+    pub rd: Option<ReturnMode>,
+    pub memop: Option<MemoryOperation>,
+}
+
+impl Default for InstructionData {
+    fn default() -> Self {
         Self {
-            x: [false; 32],
-            f: [false; 32],
-            csrs: [false; 4096],
-            regions: Vec::new(),
-            queue: VecDeque::new(),
-        }
-    }
-
-    pub fn cycle(&mut self, inst: Instruction) -> (Instruction, OoOEData) {
-        let ((write_register, read_registers), region, csr) = match inst {
-            Instruction::Full(full) => {
-                let csr = if let FullInstruction::CSR(csr) = full {
-                    Some(csr.csr)
-                } else {
-                    None
-                };
-
-                let region = match full {
-                    FullInstruction::Load(Load { offset, mode, .. }) => {
-                        Some(Region(offset as u64, mode.size()))
-                    }
-                    FullInstruction::Store(Store { offset, mode, .. }) => {
-                        Some(Region(offset as u64, mode.size()))
-                    }
-                    FullInstruction::FPLoad(FPLoad {
-                        offset, precision, ..
-                    })
-                    | FullInstruction::FPStore(FPStore {
-                        offset, precision, ..
-                    }) => Some(Region(offset as u64, precision.size())),
-                    _ => None,
-                };
-
-                let registers = match full {
-                    FullInstruction::LUI(rd, _)
-                    | FullInstruction::AUIPC(rd, _)
-                    | FullInstruction::JAL(rd, _) => (Some(Register::Integer(rd)), vec![]),
-                    FullInstruction::JALR(rd, _, rs1)
-                    | FullInstruction::Load(Load { rd, rs1, .. })
-                    | FullInstruction::IMMOp(IMMOp { rd, rs1, .. })
-                    | FullInstruction::IMMShift(IMMShift { rd, rs1, .. })
-                    | FullInstruction::Fence(rd, rs1, _, _, _)
-                    | FullInstruction::FenceI(rd, rs1, _) => {
-                        (Some(Register::Integer(rd)), vec![Register::Integer(rs1)])
-                    }
-                    FullInstruction::Branch(Branch { rs1, rs2, .. })
-                    | FullInstruction::Store(Store { rs1, rs2, .. }) => {
-                        (None, vec![Register::Integer(rs1), Register::Integer(rs2)])
-                    }
-                    FullInstruction::IntOp(IntOp { rd, rs1, rs2, .. })
-                    | FullInstruction::IntShift(IntShift { rd, rs1, rs2, .. })
-                    | FullInstruction::MulOp(MulOp { rd, rs1, rs2, .. })
-                    | FullInstruction::Atomic(Atomic { rd, rs1, rs2, .. }) => (
-                        Some(Register::Integer(rd)),
-                        vec![Register::Integer(rs1), Register::Integer(rs2)],
-                    ),
-                    FullInstruction::CSR(CSR { rd, source, .. }) => {
-                        if let CSRSource::Register(r) = source {
-                            (Some(Register::Integer(rd)), vec![Register::Integer(r)])
-                        } else {
-                            (Some(Register::Integer(rd)), vec![])
-                        }
-                    }
-                    FullInstruction::FPLoad(FPLoad { rd, rs1, .. }) => (
-                        Some(Register::FloatingPoint(rd)),
-                        vec![Register::FloatingPoint(rs1)],
-                    ),
-                    FullInstruction::FPStore(FPStore { rs1, rs2, .. }) => (
-                        None,
-                        vec![Register::FloatingPoint(rs1), Register::FloatingPoint(rs2)],
-                    ),
-                    FullInstruction::FPFusedMultiplyOp(FPFusedMultiplyOp {
-                        rd,
-                        rs1,
-                        rs2,
-                        rs3,
-                        ..
-                    }) => (
-                        Some(Register::FloatingPoint(rd)),
-                        vec![
-                            Register::FloatingPoint(rs1),
-                            Register::FloatingPoint(rs2),
-                            Register::FloatingPoint(rs3),
-                        ],
-                    ),
-                    FullInstruction::FPSingleOp(FPSingleOp { rd, rs1, rs2, .. })
-                    | FullInstruction::FPDoubleOp(FPDoubleOp { rd, rs1, rs2, .. }) => (
-                        Some(Register::FloatingPoint(rd)),
-                        vec![Register::FloatingPoint(rs1), Register::FloatingPoint(rs2)],
-                    ),
-                    _ => (None, vec![]),
-                };
-
-                (registers, region, csr)
-            }
-            Instruction::Compressed(compressed) => unimplemented!(),
-        };
-
-        let mut registers = read_registers.clone();
-        if let Some(r) = write_register.clone() {
-            registers.push(r);
-        }
-
-        let oooe_data = OoOEData {
-            write_register,
-            read_registers,
-            region,
-            csr,
-        };
-
-        /*if !can_run {
-            self.queue.push_front((inst, oooe_data));
-            (inst, oooe_data)
-        } else */
-        {
-            for register in registers {
-                match register {
-                    Register::FloatingPoint(r) => self.f[r] = true,
-                    Register::Integer(r) => self.x[r] = true,
-                }
-            }
-            (inst, oooe_data)
+            insti: 0,
+            inst: Instruction::Compressed(CompressedInstruction::NOP),
+            stage: Stage::Fetch,
+            rd: None,
+            memop: None,
         }
     }
 }
 
+#[derive(Debug)]
 pub struct Hart {
     pub region: Region,
     pub x: [u32; 32],
     pub f: [f64; 32],
     pub csrs: [u32; 4096],
     pub pc: u32,
-    pub skip: BTreeSet<u32>,
-    pub cache: BTreeMap<u32, bool>,
-    pub oooe: OoOEHelper,
+    pub pipeline: ArrayVec<[InstructionData; 5]>,
+}
+
+impl Default for Hart {
+    #[inline]
+    fn default() -> Self {
+        Self {
+            region: Region::default(),
+            x: [0; 32],
+            f: [0.0; 32],
+            csrs: [0; 4096],
+            pc: 0,
+            pipeline: ArrayVec::default(),
+        }
+    }
 }
 
 impl Hart {
-    pub fn reset(&mut self) {
+    pub fn stop(&mut self) {
         BUS.read().dram.remove_region(&self.region);
         self.region = Region(0, 0);
         self.x = [0; 32];
@@ -276,7 +219,7 @@ impl Hart {
         self.pc = 0;
     }
 
-    pub fn fetch(&mut self) -> (u32, Instruction) {
+    pub fn fetch(&mut self) {
         let index = self.region.0 + self.pc as u64;
         #[cfg(feature = "debug")]
         println!(
@@ -290,159 +233,87 @@ impl Hart {
         let res = mem.read(&mut buf, GuestAddress(index)).unwrap();
         drop(bus);
 
-        if buf[0] & 0b11 == 0b11 {
+        let insti = if buf[0] & 0b11 == 0b11 {
             if res != 4 {
                 panic!("reached end of program early");
             }
 
             self.pc += 4;
-            let inst = u32::from_le_bytes(buf);
-            (inst, Instruction::Full(FullInstruction::decode(inst)))
+            u32::from_le_bytes(buf)
         } else {
             if res != 2 {
                 panic!("reached end of program early");
             }
 
             self.pc += 2;
-            let inst = u16::from_le_bytes([buf[0], buf[1]]);
-            (
-                inst as u32,
-                Instruction::Compressed(CompressedInstruction::decode(inst)),
-            )
-        }
+            u16::from_le_bytes([buf[0], buf[1]]) as u32
+        };
+
+        self.pipeline.insert(
+            0,
+            InstructionData {
+                insti,
+                stage: Stage::Decode,
+                ..Default::default()
+            },
+        );
     }
 
-    // Helper functions for reading/writing memory.
-
-    #[inline]
-    fn read_memory(&self, buf: &mut [u8], base: u32, offset: i32) {
-        let address = (base.wrapping_add_signed(offset) + self.region.0 as u32) as u64;
-
-        let bus = BUS.read();
-        let mem = bus.dram.memory.memory();
-        let res = mem.read(buf, GuestAddress(address)).unwrap();
-
-        if res != buf.len() {
-            #[cfg(feature = "debug")]
-            println!(" | panicked!");
-            panic!("out of bounds memory access");
-        }
-    }
-
-    #[inline]
-    fn write_memory(&self, bytes: &[u8], base: u32, offset: i32) {
-        let address = (base.wrapping_add_signed(offset) + self.region.0 as u32) as u64;
-
-        let bus = BUS.read();
-        let mem = bus.dram.memory.memory();
-        let res = mem.write(bytes, GuestAddress(address)).unwrap();
-
-        if res != bytes.len() {
-            #[cfg(feature = "debug")]
-            println!(" | panicked!");
-            panic!("out of bounds memory access");
-        }
-    }
-
-    // Load/store instructions which have compressed versions as well.
-
-    #[inline]
-    fn lw(&mut self, rd: usize, offset: i32, rs1: usize) {
-        let mut buf = [0u8; 4];
-        self.read_memory(&mut buf, self.get(rs1), offset);
-        self.set(rd, u32::from_le_bytes(buf));
-    }
-
-    #[inline]
-    fn flw(&mut self, rd: usize, offset: i32, rs1: usize) {
-        let mut buf = [0u8; 4];
-        self.read_memory(&mut buf, self.get(rs1), offset);
-        self.set_f32(rd, f32::from_le_bytes(buf));
-    }
-
-    #[inline]
-    fn fld(&mut self, rd: usize, offset: i32, rs1: usize) {
-        let mut buf = [0u8; 8];
-        self.read_memory(&mut buf, self.get(rs1), offset);
-        self.set_f64(rd, f64::from_le_bytes(buf));
-    }
-
-    #[inline]
-    fn sw(&self, rs1: usize, rs2: usize, offset: i32) {
-        self.write_memory(&self.get(rs2).to_le_bytes(), self.get(rs1), offset);
-    }
-
-    #[inline]
-    fn fsw(&self, rs1: usize, rs2: usize, offset: i32) {
-        self.write_memory(&self.get_f32(rs2).to_le_bytes(), self.get(rs1), offset);
-    }
-
-    #[inline]
-    fn fsd(&self, rs1: usize, rs2: usize, offset: i32) {
-        self.write_memory(&self.get_f64(rs2).to_le_bytes(), self.get(rs1), offset);
+    pub fn decode(&mut self) {
+        let inst_data = self.pipeline.get_mut(1).unwrap();
+        inst_data.inst = if inst_data.insti & 0b11 == 0b11 {
+            Instruction::Full(FullInstruction::decode(inst_data.insti))
+        } else {
+            Instruction::Compressed(CompressedInstruction::decode(inst_data.insti as u16))
+        };
+        inst_data.stage = Stage::Execute;
     }
 
     // Execute an instruction.
 
     #[inline]
-    pub fn execute(&mut self, inst_u32: u32, inst: Instruction) {
-        match inst {
-            Instruction::Full(full) => self.execute_full(inst_u32, full),
-            Instruction::Compressed(compressed) => {
-                self.execute_compressed(inst_u32 as u16, compressed)
-            }
-        }
+    pub fn execute(&mut self) {
+        match self.pipeline[2].inst {
+            Instruction::Full(full) => self.execute_full(full),
+            Instruction::Compressed(compressed) => self.execute_compressed(compressed),
+        };
+
+        self.pipeline.get_mut(2).unwrap().stage = Stage::Memory;
     }
 
     // Execute a compressed instruction.
 
-    pub fn execute_compressed(&mut self, inst_u16: u16, inst: CompressedInstruction) {
+    pub fn execute_compressed(&mut self, inst: CompressedInstruction) {
         #[cfg(feature = "debug")]
-        print!("{}", inst);
+        println!("{}", inst);
 
         match inst {
-            CompressedInstruction::NOP => {},
+            CompressedInstruction::NOP => {}
             _ => unimplemented!(),
         }
     }
 
     // Execute a full instruction.
 
-    pub fn execute_full(
-        &mut self,
-        inst_u32: u32,
-        inst: FullInstruction, /* , ooe_data: OoOEData*/
-    ) {
+    pub fn execute_full(&mut self, inst: FullInstruction) {
         #[cfg(feature = "debug")]
-        print!("{}", inst);
-
-        if self.skip.contains(&inst_u32) {
-            return;
-        }
+        println!("{}", inst);
 
         match inst {
             FullInstruction::LUI(rd, immediate) => {
-                self.set(rd, (immediate << 12) - 4);
-                #[cfg(feature = "debug")]
-                println!(" | rd: {}", self.get(rd));
+                self.set(rd, immediate - 4);
             }
             FullInstruction::AUIPC(rd, immediate) => {
-                self.pc += immediate << 12;
+                self.pc += immediate;
                 self.set(rd, self.pc);
-                #[cfg(feature = "debug")]
-                println!(" | rd: {}", self.get(rd));
             }
             FullInstruction::JAL(rd, offset) => {
-                self.pc = self.pc.wrapping_add_signed(offset) - 4;
+                self.pc = self.pc.wrapping_add_signed(offset);
                 self.set(rd, self.pc + 4);
-                #[cfg(feature = "debug")]
-                println!(" | rd: {}", self.get(rd));
             }
             FullInstruction::JALR(rd, offset, rs1) => {
-                self.pc = (self.get(rs1).wrapping_add_signed(offset) << 1) >> 1;
+                self.pc = self.get(rs1).wrapping_add_signed(offset) & 0xFFFFFFFE;
                 self.set(rd, self.pc + 4);
-                #[cfg(feature = "debug")]
-                println!(" | rd: {}", self.get(rd));
             }
             FullInstruction::Branch(Branch {
                 rs1,
@@ -451,8 +322,8 @@ impl Hart {
                 mode,
             }) => {
                 let branching = match mode {
-                    BranchMode::Equal => (self.get(rs1) as i32) == self.get(rs2) as i32,
-                    BranchMode::NotEqual => (self.get(rs1) as i32) != self.get(rs2) as i32,
+                    BranchMode::Equal => self.get(rs1) == self.get(rs2),
+                    BranchMode::NotEqual => self.get(rs1) != self.get(rs2),
                     BranchMode::LessThan => (self.get(rs1) as i32) < self.get(rs2) as i32,
                     BranchMode::GreaterOrEqual => (self.get(rs1) as i32) >= self.get(rs2) as i32,
                     BranchMode::LessThanUnsigned => self.get(rs1) < self.get(rs2),
@@ -474,35 +345,14 @@ impl Hart {
                 offset,
                 mode,
             }) => {
-                match mode {
-                    LoadMode::Byte => {
-                        let mut buf = [0u8; 1];
-                        self.read_memory(&mut buf, self.get(rs1), offset);
-                        self.set(rd, sign_extend_u32(buf[0] as u32, 8) as u32);
-                    }
-                    LoadMode::HalfWord => {
-                        let mut buf = [0u8; 2];
-                        self.read_memory(&mut buf, self.get(rs1), offset);
-                        self.set(
-                            rd,
-                            sign_extend_u32(u16::from_le_bytes(buf) as u32, 16) as u32,
-                        )
-                    }
-                    LoadMode::Word => self.lw(rd, offset, rs1),
-                    LoadMode::UnsignedByte => {
-                        let mut buf = [0u8; 1];
-                        self.read_memory(&mut buf, self.get(rs1), offset);
-                        self.set(rd, buf[0] as u32);
-                    }
-                    LoadMode::UnsignedHalfWord => {
-                        let mut buf = [0u8; 2];
-                        self.read_memory(&mut buf, self.get(rs1), offset);
-                        self.set(rd, u16::from_le_bytes(buf) as u32);
-                    }
-                }
-
-                #[cfg(feature = "debug")]
-                println!(" | rd: {}", self.get(rd) as i32);
+                let address = self.get(rs1).wrapping_add_signed(offset) + self.region.0 as u32;
+                let ret = match mode {
+                    LoadMode::Single => ReturnMode::Single(rd, 0.0),
+                    LoadMode::Double => ReturnMode::Double(rd, 0.0),
+                    _ => ReturnMode::Integer(rd, 0),
+                };
+                self.pipeline[2].rd = Some(ret);
+                self.pipeline[2].memop = Some(MemoryOperation::Load(address, mode));
             }
             FullInstruction::Store(Store {
                 rs1,
@@ -510,28 +360,24 @@ impl Hart {
                 offset,
                 mode,
             }) => {
-                match mode {
-                    StoreMode::Byte => {
-                        self.write_memory(
-                            &(self.get(rs2) as u8).to_le_bytes(),
-                            self.get(rs1),
-                            offset,
-                        );
+                let bytes: ArrayVec<[u8; 8]> = match mode {
+                    StoreMode::Byte => [self.get(rs2) as u8].as_ref().try_into().unwrap(),
+                    StoreMode::HalfWord => (self.get(rs2) as u16)
+                        .to_le_bytes()
+                        .as_ref()
+                        .try_into()
+                        .unwrap(),
+                    StoreMode::Word => self.get(rs2).to_le_bytes().as_ref().try_into().unwrap(),
+                    StoreMode::Single => {
+                        self.get_f32(rs2).to_le_bytes().as_ref().try_into().unwrap()
                     }
-                    StoreMode::HalfWord => {
-                        self.write_memory(
-                            &(self.get(rs2) as u16).to_le_bytes(),
-                            self.get(rs1),
-                            offset,
-                        );
+                    StoreMode::Double => {
+                        self.get_f64(rs2).to_le_bytes().as_ref().try_into().unwrap()
                     }
-                    StoreMode::Word => {
-                        self.sw(rs1, rs2, offset);
-                    }
-                }
+                };
 
-                #[cfg(feature = "debug")]
-                println!(" | value: {}", self.get(rs2) as i32);
+                let address = self.get(rs1).wrapping_add_signed(offset) + self.region.0 as u32;
+                self.pipeline[2].memop = Some(MemoryOperation::Store(address, bytes));
             }
             FullInstruction::IMMOp(IMMOp {
                 rd,
@@ -540,7 +386,6 @@ impl Hart {
                 mode,
             }) => {
                 if rd == 0 {
-                    self.skip.insert(inst_u32);
                     return;
                 }
 
@@ -555,9 +400,6 @@ impl Hart {
                         IMMOpMode::And => self.get(rs1) & (immediate as u32),
                     },
                 );
-
-                #[cfg(feature = "debug")]
-                println!(" | rd: {}", self.get(rd) as i32);
             }
             FullInstruction::IMMShift(IMMShift {
                 rd,
@@ -567,7 +409,6 @@ impl Hart {
                 ..
             }) => {
                 if rd == 0 {
-                    self.skip.insert(inst_u32);
                     return;
                 }
 
@@ -579,13 +420,9 @@ impl Hart {
                         ShiftMode::ArithmeticRight => ((self.get(rs1) as i32) >> amount) as u32,
                     },
                 );
-
-                #[cfg(feature = "debug")]
-                println!(" | rd: {}", self.get(rd) as i32);
             }
             FullInstruction::IntOp(IntOp { rd, rs1, rs2, mode }) => {
                 if rd == 0 {
-                    self.skip.insert(inst_u32);
                     return;
                 }
 
@@ -603,13 +440,9 @@ impl Hart {
                         IntOpMode::And => self.get(rs1) & self.get(rs2),
                     },
                 );
-
-                #[cfg(feature = "debug")]
-                println!(" | rd: {}", self.get(rd) as i32);
             }
             FullInstruction::IntShift(IntShift { rd, rs1, rs2, mode }) => {
                 if rd == 0 {
-                    self.skip.insert(inst_u32);
                     return;
                 }
 
@@ -623,26 +456,22 @@ impl Hart {
                         }
                     },
                 );
-
-                #[cfg(feature = "debug")]
-                println!(" | rd: {}", self.get(rd) as i32);
             }
-            FullInstruction::Fence(rd, rs1, fm, pred, succ) => unimplemented!(),
+            FullInstruction::Fence(_rd, _rs1, _fm, _pred, _succ) => unimplemented!(),
             FullInstruction::ECall => unimplemented!(),
             FullInstruction::EBreak => unimplemented!(),
             // Zifencei
-            FullInstruction::FenceI(rd, rs1, immediate) => unimplemented!(),
+            FullInstruction::FenceI(_rd, _rs1, _immediate) => unimplemented!(),
             // Zicsr
             FullInstruction::CSR(CSR {
-                rd,
-                source,
-                mode,
-                csr,
+                rd: _,
+                source: _,
+                mode: _,
+                csr: _,
             }) => unimplemented!(),
             // RV32M
             FullInstruction::MulOp(MulOp { rd, rs1, rs2, mode }) => {
                 if rd == 0 {
-                    self.skip.insert(inst_u32);
                     return;
                 }
 
@@ -675,16 +504,13 @@ impl Hart {
                         MulOpMode::RemainderUnsigned => self.get(rs1).wrapping_rem(self.get(rs2)),
                     },
                 );
-
-                #[cfg(feature = "debug")]
-                println!(" | rd: {}", self.get(rd) as i32);
             }
             // RV32A
             FullInstruction::Atomic(Atomic {
-                rd,
-                rs1,
-                rs2,
-                ordering,
+                rd: _,
+                rs1: _,
+                rs2: _,
+                ordering: _,
                 mode,
             }) => match mode {
                 AtomicMode::LoadReservedWord => unimplemented!(),
@@ -700,24 +526,6 @@ impl Hart {
                 AtomicMode::MaximumUnsignedWord => unimplemented!(),
             },
             // RV32F/D
-            FullInstruction::FPLoad(FPLoad {
-                rd,
-                rs1,
-                offset,
-                precision,
-            }) => match precision {
-                FPPrecision::Single => self.flw(rd, offset, rs1),
-                FPPrecision::Double => self.fld(rd, offset, rs1),
-            },
-            FullInstruction::FPStore(FPStore {
-                rs1,
-                rs2,
-                offset,
-                precision,
-            }) => match precision {
-                FPPrecision::Single => self.fsw(rs1, rs2, offset),
-                FPPrecision::Double => self.fsd(rs1, rs2, offset),
-            },
             FullInstruction::FPFusedMultiplyOp(FPFusedMultiplyOp {
                 rd,
                 rs1,
@@ -740,9 +548,6 @@ impl Hart {
                     }
 
                     self.set_f32(rd, self.round_f32(rounding, false, output));
-
-                    #[cfg(feature = "debug")]
-                    println!(" | rd: {}", self.get_f32(rd));
                 }
                 FPPrecision::Double => {
                     let mut adder = self.get_f64(rs3);
@@ -756,9 +561,6 @@ impl Hart {
                     }
 
                     self.set_f64(rd, self.round_f64(rounding, false, output));
-
-                    #[cfg(feature = "debug")]
-                    println!(" | rd: {}", self.get_f64(rd));
                 }
             },
             // RV32F
@@ -821,9 +623,6 @@ impl Hart {
                             _ => unreachable!(),
                         },
                     );
-
-                    #[cfg(feature = "debug")]
-                    println!(" | rd: {}", self.get_f32(rd));
                 }
                 FPReturnMode::Integer => {
                     self.set(
@@ -882,9 +681,6 @@ impl Hart {
                             _ => unreachable!(),
                         },
                     );
-
-                    #[cfg(feature = "debug")]
-                    println!(" | rd: {}", self.get(rd));
                 }
             },
             // RV32D
@@ -946,9 +742,6 @@ impl Hart {
                             _ => unreachable!(),
                         },
                     );
-
-                    #[cfg(feature = "debug")]
-                    println!(" | rd: {}", self.get_f64(rd));
                 }
                 FPReturnMode::Single => {
                     self.set_f32(
@@ -960,9 +753,6 @@ impl Hart {
                             _ => unreachable!(),
                         },
                     );
-
-                    #[cfg(feature = "debug")]
-                    println!(" | rd: {}", self.get_f32(rd));
                 }
                 FPReturnMode::Integer => {
                     self.set(
@@ -1021,12 +811,102 @@ impl Hart {
                             _ => unreachable!(),
                         },
                     );
-
-                    #[cfg(feature = "debug")]
-                    println!(" | rd: {}", self.get(rd) as i32);
                 }
             },
         }
+
+        self.pipeline.get_mut(2).unwrap().stage = Stage::Memory;
+    }
+
+    pub fn memory(&mut self) {
+        if let Some(op) = &self.pipeline[3].memop {
+            let bus = BUS.read();
+            let mem = bus.dram.memory.memory();
+
+            match op {
+                MemoryOperation::Load(address, mode) => {
+                    let m = *mode;
+                    let size = m.size();
+                    let mut buf = [0; 8];
+                    let res = mem
+                        .read(&mut buf[0..size], GuestAddress(*address as u64))
+                        .unwrap();
+                    if res != size {
+                        #[cfg(feature = "debug")]
+                        println!(" | panicked!");
+                        panic!("out of bounds memory access");
+                    }
+
+                    if let Some(rd) = &mut self.pipeline[3].rd {
+                        match rd {
+                            ReturnMode::Integer(_, out) => {
+                                *out = match m {
+                                    LoadMode::Byte => sign_extend_u32(buf[0] as u32, 8) as u32,
+                                    LoadMode::HalfWord => sign_extend_u32(
+                                        u16::from_le_bytes(buf[0..2].try_into().unwrap()) as u32,
+                                        16,
+                                    )
+                                        as u32,
+                                    LoadMode::Word => {
+                                        u32::from_le_bytes(buf[0..4].try_into().unwrap())
+                                    }
+                                    LoadMode::UnsignedByte => buf[0] as u32,
+                                    LoadMode::UnsignedHalfWord => {
+                                        u16::from_le_bytes(buf[0..2].try_into().unwrap()) as u32
+                                    }
+                                    _ => unreachable!(),
+                                }
+                            }
+                            ReturnMode::Single(_, out) => {
+                                *out = f32::from_le_bytes(buf[0..4].try_into().unwrap())
+                            }
+                            ReturnMode::Double(_, out) => *out = f64::from_le_bytes(buf),
+                        }
+                    } else {
+                        panic!("load w/o return");
+                    }
+                }
+                MemoryOperation::Store(address, bytes) => {
+                    let size = bytes.len();
+                    let res = mem
+                        .write(&bytes[0..size], GuestAddress(*address as u64))
+                        .unwrap();
+                    if res != size {
+                        #[cfg(feature = "debug")]
+                        println!(" | panicked!");
+                        panic!("out of bounds memory access");
+                    }
+                }
+            }
+        }
+
+        self.pipeline.get_mut(3).unwrap().stage = Stage::Write;
+    }
+
+    pub fn write(&mut self) {
+        let item = &self.pipeline[4];
+
+        if let Some(rd) = &item.rd {
+            match rd {
+                ReturnMode::Integer(r, value) => {
+                    if r != &0 {
+                        self.x[*r] = *value
+                    }
+                }
+                ReturnMode::Single(r, value) => {
+                    self.f[*r] = f64::from_bits(0xFFFFFFFF00000000u64 | value.to_bits() as u64)
+                }
+                ReturnMode::Double(r, value) => self.f[*r] = *value,
+            }
+
+            #[cfg(feature = "debug")]
+            {
+                let signed_x: [i32; 32] = unsafe { transmute(self.x) };
+                println!("x: {:?}", signed_x);
+            }
+        }
+
+        self.pipeline.remove(4);
     }
 
     // Perform rounding based on RM table. (f32)
@@ -1064,14 +944,12 @@ impl Hart {
     // NaN-box an f32 and place it in f.
     #[inline]
     pub fn set_f32(&mut self, reg: usize, value: f32) {
-        //self.ooe.f[reg] = false;
-        self.f[reg] = f64::from_bits(0xFFFFFFFF00000000u64 | value.to_bits() as u64);
+        self.pipeline[2].rd = Some(ReturnMode::Single(reg, value));
     }
 
     #[inline]
     pub fn set_f64(&mut self, reg: usize, value: f64) {
-        //self.ooe.f[reg] = false;
-        self.f[reg] = value;
+        self.pipeline[2].rd = Some(ReturnMode::Double(reg, value));
     }
 
     #[inline]
@@ -1080,7 +958,6 @@ impl Hart {
             return;
         }
 
-        //self.ooe.x[reg] = false;
-        self.x[reg] = value;
+        self.pipeline[2].rd = Some(ReturnMode::Integer(reg, value));
     }
 }
